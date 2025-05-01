@@ -38,11 +38,8 @@ Built on top of the powerful [Agno framework](https://docs.agno.com), RAI enable
 ### Features🔧:
 ---
 
-<h1 align="center">
+![demo](https://github.com/user-attachments/assets/c2926693-6b54-4a68-8ba1-cc7fde6fb479)
 
-<img src="https://github.com/RevoltSecurities/RAI">
-<br>
-</h1>
 
 - 🧠 **Interactive Shell Mode** – Engage in real-time conversations with LLM agents and teams via a powerful interactive CLI. Seamlessly switch between agents or teams with intuitive commands.
   
