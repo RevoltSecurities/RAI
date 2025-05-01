@@ -28,6 +28,13 @@
 
 </div>
 
+
+
+**RAI (Revolt AI Agent)** is a modern, YAML-driven CLI tool and framework for building intelligent agents and agent teams tailored for cybersecurity automation, offensive security, and penetration testing operations.
+Built on top of the powerful [Agno framework](https://docs.agno.com), RAI enables security professionals, red teamers, and AI hackers to design, orchestrate, and deploy advanced LLM-powered agents without writing traditional code. Its no-code architecture leverages structured YAML configurations to define agent behavior, tools, and team collaboration logic.
+
+
+
 ### Features🔧:
 ---
 
@@ -37,18 +44,25 @@
 <br>
 </h1>
 
-- **Interactive Shell Mode** - RAI developed with advance shell interface that allows user to switch between built LLM Teams and LLM Agents and start conversation with selected agents/teams
-- **Low-Code YAML-Based Agent & Team Building** – Automate complex LLM agent/team setups with easy-to-edit YAML templates.  
-- **Multiple Agent & Team Support** – Build, manage, and run multiple agents or teams in parallel with full isolation.  
-- **Tool Integration (SSE & stdio)** – Seamlessly plug in tools using Server-Sent Events or standard I/O for real-time interaction.  
-- **Dynamic Team Allocation** – Assign and reconfigure agents across teams dynamically.  
-- **MCP-Compatible Infrastructure** – Built for modularity and future compatibility with Model Context Protocols Tools support.  
-- **Fast & Flexible Configuration** – Lightweight setup with smart defaults and extensible configuration options.  
-- **Built-In Reasoning Engine** – Agents can *think*, *analyze*, and *respond* more intelligently before executing tasks.  
-- **Designed for Cybersecurity Automation** – Tailored for offensive security tasks like recon, exploitation, and team coordination.
-- **Agent2Agent Communication** - LLM Team use your specialized agent for specific tasks and communicate with each other which make different agent to communicate
-
-- **Multiple LLM Model Providers** - RAI supports wide range of LLM Provider like OpenAI, Gemini, Grok, Groq, xAI, Ollama and more
+- 🧠 **Interactive Shell Mode** – Engage in real-time conversations with LLM agents and teams via a powerful interactive CLI. Seamlessly switch between agents or teams with intuitive commands.
+  
+- 📝 **YAML-Based Agent & Team Building** – Define agents and teams using easy-to-edit YAML templates. Accelerate development with low-code configurations and smart defaults.
+  
+- 🤖 **Multi-Agent & Team Support** – Build, run, and manage multiple agents or teams in parallel with full operational isolation and coordination.
+  
+- 🔌 **Tool Integration (SSE & stdio)** – Integrate custom tools via Server-Sent Events or standard I/O for dynamic agent-tool communication.
+  
+- 🔄 **Dynamic Team Allocation** – Flexibly assign, reassign, or reconfigure agents across different teams at runtime to optimize task workflows.
+  
+- 🧩 **MCP-Compatible Infrastructure** – Built with modularity in mind, RAI is ready for integration with Model Context Protocol (MCP) tooling and future agent standards.
+  
+- ⚙️ **Fast & Flexible Configuration** – Lightweight setup with extensible configuration options. Designed for developers who want control without the clutter.
+  
+- 🧠 **Built-In Reasoning Engine** – Agents can *think*, *reason*, and *decide* intelligently before taking action, enabling smarter task execution.
+  
+- 🛡️ **Cybersecurity-First Design** – Purpose-built for red teaming, bug bounty automation, recon, exploit development, and offensive security workflows.
+  
+- 🧬 **Agent-to-Agent Communication** – Enable inter-agent messaging within teams, allowing agents to delegate tasks, collaborate, and share results autonomously.
 
 
 ### Supported LLM Providers
@@ -305,3 +319,58 @@ teams:
     success_criteria: "All vulnerabilities are clearly identified, explained, and mitigated."
     think: true
 ```
+
+---
+
+### 🚀 Future Enhancement Plan:
+
+RAI (Revolt AI Agent) is under **continuous development** 🛠️ — evolving rapidly to empower cybersecurity automation with intelligent, collaborative agents. Upcoming features include:
+
+- 🖥 **Agent UI with Agno UI Integration**  
+  A powerful web-based UI to manage, monitor, and interact with agents, tools, and teams visually — built on Agno's robust interface layer.
+
+- 🧠 **Memory & Session Storage Management**  
+  Agents will support persistent session memory:
+  - Maintain conversation continuity  
+  - Recall user preferences, task history, and learned context
+
+- 📚 **Agent & Team Knowledge Injection**  
+  Allow agents and teams to use **custom knowledge bases**, enabling them to:
+  - Ingest structured/unstructured data sources (e.g., markdown, PDFs, JSON, code)  
+  - Improve reasoning and task performance through embedded knowledge  
+  - Learn iteratively and adapt during operations
+
+- 🧩 **Agent Knowledge Learning Loop**  
+  Equip agents with mechanisms to analyze outcomes, refine their behavior, and build contextual awareness from completed tasks.
+
+
+> ⚠️ **RAI is Under Continuous Development**
+> 
+> ───────────────────────────────────────────────
+> 
+> 🛠️ RAI (Revolt AI Agent) is an actively evolving project built on top of the powerful **Agno** framework.
+> This means you can expect:
+>
+> 🔄 Regular updates & new feature drops  
+> 🧪 Experimental support for cutting-edge agent workflows  
+> 🔧 Frequent performance and usability improvements  
+> 🧰 Expanding tool integrations and LLM backend compatibility  
+> 📦 Community-driven contributions & enhancements welcome!
+> 
+> While RAI is already production-capable, it’s designed to grow fast—
+> so expect changes, iteration, and rapid innovation.
+> 
+> ➕ Stay updated. Join the journey. Contribute. Hack with AI.
+> ───────────────────────────────────────────────
+
+---
+
+### ❤️ Acknowledgements & Community Contribution:
+
+A special thanks to the [**Agno Framework**](https://github.com/agno-agi/agno) for providing a powerful foundation for RAI. Their contributions have made it possible to build a sophisticated, flexible, and scalable platform that empowers cybersecurity professionals worldwide. 🙏
+
+RAI (Revolt AI Agent) is developed with ❤️ by [**RevoltSecurities**](https://github.com/RevoltSecurities), driven by a passion for open-source and cybersecurity innovation. We are excited to share this tool with the community and empower the next generation of red teamers, security researchers, and AI hackers. 🚀
+We **welcome** contributions, ideas, and feedback from the open-source community. Together, we can make RAI even more powerful and continue to drive innovation in the cybersecurity field. 
+Your contributions, whether in the form of code, documentation, bug reports, or ideas, are highly appreciated. Let's build, learn, and grow together! 🤝
+
+
