@@ -65,7 +65,7 @@ Built on top of the powerful [Agno framework](https://docs.agno.com), RAI enable
 - 🧬 **Agent-to-Agent Communication** – Enable inter-agent messaging within teams, allowing agents to delegate tasks, collaborate, and share results autonomously.
 
 
-### Supported LLM Providers
+### Supported LLM Providers:
 - **Anthropic**
 - **AWS**
 - **Azure**
