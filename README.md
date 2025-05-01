@@ -96,7 +96,7 @@ RAI can be easily installed using [**uv**](https://github.com/astral-sh/uv) — 
 ### 📦 Install with `uv`
 
 ```bash
-uv tool install rai
+uv tool install revolt-rai
 ```
 
 > ✅ Make sure you have Python 3.13 or newer installed.  
