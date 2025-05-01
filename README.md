@@ -24,7 +24,7 @@
 
  <div align="center">
 
-![GitHub last commit](https://img.shields.io/github/last-commit/RevoltSecurities/Subdominator) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/RevoltSecurities/Subdominator) [![GitHub license](https://img.shields.io/github/license/RevoltSecurities/Subdominator)](https://github.com/RevoltSecurities/Subdominator/blob/main/LICENSE)
+![GitHub last commit](https://img.shields.io/github/last-commit/RevoltSecurities/RAI) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/RevoltSecurities/RAI) [![GitHub license](https://img.shields.io/github/license/RevoltSecurities/RAI)](https://github.com/RevoltSecurities/RAI/blob/main/LICENSE)
 
 </div>
 
