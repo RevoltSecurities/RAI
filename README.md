@@ -236,6 +236,11 @@ Agents or Teams can integrate external or internal MCP tools via yaml configurat
 
 ## 📦 Sample Full YAML Configuration
 
+```console
+nano ~/.config/RAI/raiagent.yaml
+```
+and paste these below content and also use valid models and secret apikeys to work with RAI⚡
+
 ```yaml
 agents:
   - name: "web_pentest_agent"
