@@ -16,10 +16,10 @@
 
 
 <p align="center">
-    <a href="https://github.com/RevoltSecurities/RAI">Features</a> |
-    <a href="https://github.com/RevoltSecurities/RAI">Installation</a> |
-    <a href="https://github.com/RevoltSecurities/RAI">Usage</a> |
-    <a href="https://github.com/RevoltSecurities/RAI">YAML Configuration</a>
+    <a href="https://github.com/RevoltSecurities/RAI?tab=readme-ov-file#features">Features</a> |
+    <a href="https://github.com/RevoltSecurities/RAI?tab=readme-ov-file#installation">Installation</a> |
+    <a href="https://github.com/RevoltSecurities/RAI?tab=readme-ov-file#usage">Usage</a> |
+    <a href="https://github.com/RevoltSecurities/RAI?tab=readme-ov-file#-yaml-configuration">Building Agents & Teams with YAML Configuration</a>
 </p>
 
  <div align="center">
@@ -78,7 +78,7 @@
 - **xAI**
 
 
-## Installation🚀
+### Installation🚀
 
 RAI can be easily installed using [**uv**](https://github.com/astral-sh/uv) — a fast Python package manager designed for modern workflows.
 
