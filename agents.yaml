@@ -93,7 +93,7 @@ agents:
       command: uv
       args:
       - --directory
-      - /home/sanjai/revolt-mcp
+      - /home/sanjai/test-mcp
       - run
       - revolt-mcp.py
       env: {}
