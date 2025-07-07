@@ -1,7 +1,7 @@
 ## RAI – Next-Level Automation Tool & Framework for Building LLM Agents and Teams in Cybersecurity
 
 <h1 align="center">
-  <img src="static/rai-demo.jpg" alt="RAI" width="450px">
+  <img src="static/rai-logo.png" alt="RAI" width="450px">
   <br>
 </h1>
 
