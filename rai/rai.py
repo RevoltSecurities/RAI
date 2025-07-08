@@ -42,7 +42,7 @@ class RAI:
         if gitversion == self.gitcurrent:
             print(f"[{self.logger.blue}{self.logger.bold}version{self.logger.reset}]:{self.logger.bold}{self.logger.white}RAI current version {gitversion} ({self.logger.green}latest{self.logger.reset}{self.logger.bold}{self.logger.white}){self.logger.reset}")
         else:
-            print(f"[{self.logger.blue}{self.logger.bold}version{self.logger.reset}]:{self.logger.bold}{self.logger.white}RAI current version {gitversion} ({self.logger.red}latest{self.logger.reset}{self.logger.bold}{self.logger.white}){self.logger.reset}")
+            print(f"[{self.logger.blue}{self.logger.bold}version{self.logger.reset}]:{self.logger.bold}{self.logger.white}RAI current version {gitversion} ({self.logger.red}outdated{self.logger.reset}{self.logger.bold}{self.logger.white}){self.logger.reset}")
         print("\n")
         return
     
