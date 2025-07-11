@@ -13,6 +13,11 @@ class CLI:
             parser.add_argument("-cp", "--config-path", type=str, default=None, help="")
             parser.add_argument("-sup", "--show-updates", action="store_true", help="")
             parser.add_argument("-up", "--update", action="store_true", help="")
+            parser.add_argument("-gui", "--gui-config", action="store_true", default=False)
+            parser.add_argument("-host", "--host", type=str, default="127.0.0.1")
+            parser.add_argument("-port", "--port", type=int, default=7777)
+            parser.add_argument("-web", "--web-api", action="store_true")
+            parser.add_argument("-V", "--verbose", action="store_true")
             args = parser.parse_args()
             return args
         except Exception as e:

@@ -1,37 +1,29 @@
-name: Release to PyPI
+name: Release to Official PyPI on Release Publish
 
 on:
   release:
-    types:
-      - created
+    types: [created]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: pypi
 
     steps:
-      - name: Check out code
-        uses: actions/checkout@v2
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v2
+      - name: Set up Python Environment
+        uses: actions/setup-python@v5
         with:
-          python-version: 3.13.2
+          python-version: '3.13.3'
 
-      - name: Install uv
+      - name: Install uv via pip
         run: pip install uv
 
-      - name: Install build and publish dependencies with uv
+      - name: Build Source and Wheel Distributions with uv
+        run: uv build --sdist --wheel --out-dir dist
 
-        run: uv pip install setuptools wheel twine
-
-      - name: Build package with uv
-
-        run: uv build
-
-      - name: Publish package with uv
-
-        run: uv publish
-        env:
-          TWINE_USERNAME: ${{ secrets.PYPI_USER }}
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+      - name: Publish to PyPI using uv with Token
+        run: uv publish --token ${{ secrets.PYPI_TOKEN }}
