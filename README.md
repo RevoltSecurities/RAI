@@ -19,6 +19,7 @@
     <a href="https://github.com/RevoltSecurities/RAI?tab=readme-ov-file#features">Features</a> |
     <a href="https://github.com/RevoltSecurities/RAI?tab=readme-ov-file#installation">Installation</a> |
     <a href="https://github.com/RevoltSecurities/RAI?tab=readme-ov-file#usage">Usage</a> |
+    <a href="https://github.com/RevoltSecurities/RAI?tab=readme-ov-file#documentation">Documentation</a>
 </p>
 
  <div align="center">
@@ -92,14 +93,12 @@ Built on top of the powerful [Agno framework](https://docs.agno.com), RAI enable
 
 RAI can be easily installed using [**uv**](https://github.com/astral-sh/uv) — a fast Python package manager designed for modern workflows.
 
-### 📦 Install with `uv`
+### 📦 Install with `PIP`
 
 ```bash
-uv tool install revolt-rai
+pip install revolt-rai --break-system-packages
 ```
-
 > ✅ Make sure you have Python 3.13 or newer installed.  
-> ✅ `uv` automatically handles virtual environments, speed, and dependency resolution.
 
   
 ### Usage:
@@ -119,22 +118,37 @@ rai -h
                      - RevoltSecurities
 
 
-[DESCRIPTION]: 
+                                                                              RAI - A next-gen framework to automate the creation of intelligent agents & teams                                                                               
+                                                                                                 for cybersecurity and offensive operations                                                                                                   
 
-    RAI is a next-gen CLI tool and framework to automate the creation of intelligent agents and teams for cybersecurity and offensive security operations
+[CORE]:
+╭──────────────────────┬────────────────────────────────────────────────────────────╮
+│ Flag                 │ Description                                                │
+├──────────────────────┼────────────────────────────────────────────────────────────┤
+│ -h, --help           │ show this help message and exit                            │
+│ -v, --version        │ show the current RAI version                               │
+│ -cp, --config-path   │ path to YAML config (default: ~/.config/RAI/raiagent.yaml) │
+│ -sup, --show-updates │ show recent updates and changelog                          │
+│ -up, --update        │ update RAI to the latest version                           │
+│ -V, --verbose        │ increase the verbosity in building LLM agents and Teams    │
+╰──────────────────────┴────────────────────────────────────────────────────────────╯
 
-[USAGE]: 
+[INTERFACE]:
+╭────────────────────┬────────────────────────────────────────────╮
+│ Flag               │ Description                                │
+├────────────────────┼────────────────────────────────────────────┤
+│ -gui, --gui-config │ launch GUI to build agents, teams & memory │
+│ -web, --web-api    │ start RAI's Web/API interface              │
+│ -host, --host      │ set host for Web/API (default: 127.0.0.1)  │
+│ -port, --port      │ set port for Web/API (default: 7777)       │
+╰────────────────────┴────────────────────────────────────────────╯
 
-    rai [flags]
 
-[FLAGS]:
-
-    -h,    --help                 :  Show this help message and exit.
-    -v,    --version              :  Show current version of RAI.
-    -cp,   --config-path          :  Path to YAML config file (default: $HOME/.config/RAI/raiagent.yaml).
-    -sup,  --show-updates         :  Show latest update details.
-    -up,   --update               :  Update RAI to the latest version (manual YAML update).
-
+Example Usage: 
+  rai -gui   # Launch the RAI configuration GUI with default yaml file 
+  rai -gui -cp agents.yaml   # Launch the RAI configuration GUI with custom yaml file 
+  rai -web -host 127.0.0.1 -port 8080   # Start the Web/API interface on all interfaces port 8080 
+  rai -cp /path/to/custom_config.yaml   # Run RAI with a custom configuration file
 ```
 ## 📖 Documentation
 
