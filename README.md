@@ -136,100 +136,21 @@ rai -h
     -up,   --update               :  Update RAI to the latest version (manual YAML update).
 
 ```
+## 📖 Documentation
 
+Explore comprehensive guides, walkthroughs, and best practices in the **RAI Wiki**:
 
-# 🛠 YAML Configuration
+👉 **[RAI Documentation Wiki](https://github.com/RevoltSecurities/RAI/wiki)**
 
-RAI allows you to define **AI Agents** and **Agent Teams** using a simple YAML configuration. This configuration determines how agents behave, what models they use, what tools are attached, and how they collaborate as teams.
+The wiki includes:
 
----
+* **Installation & Setup**
+* **Interactive Shell Mode** for real-time LLM agent/agent‑team interactions
+* **YAML‑Based Agent & Team Configs**, complete with smart defaults and templates
+* **Tool Integration** via SSE & stdio for powerful automation workflows
+* **Advanced Usage**: orchestrating teams, delegating tasks, and chaining agent actions
+* **FAQ**, covering RAI’s purpose, cybersecurity focus, open‑source licensing, LLM support, and more
 
-## ✳️ Agent Configuration (`agents`)
-
-Each agent must define the following **required fields**:
-
-| Field         | Type     | Description |
-|--------------|----------|-------------|
-| `name`        | string   | Unique agent name, must use `-` or `_` only (e.g., `web_pentest_agent`) |
-| `model`       | string   | The provider name (e.g., `openai`, `gemini`, `groq`, `xai`) |
-| `model-id`    | string   | The specific model ID to use (e.g., `gpt-4`, `gemini-2.0-pro`) |
-| `apikey`      | string   | API key for the chosen provider  |
-| `role`        | string   | A short sentence describing the agent’s purpose |
-| `description` | string   | Multi-line detailed description of the agent’s capabilities |
-| `instructions`| string   | A clear set of multi-line operational guidelines for the agent |
-| `tools`       | toolconfig     | Tools assigned to the agent (`sse` or `stdio` types with required params) |
-
-
-> ✅ The only **optional field** is `think: true`, which enables your agent to think and analyze before its response
-
----
-
-## 🧠 Team Configuration (`teams`)
-
-Teams are collaborative groups of agents that share analysis tasks.
-
-Each team must define the following **required fields**:
-
-| Field         | Type     | Description |
-|--------------|----------|-------------|
-| `name`        | string   | Team name, must use `-` or `_` only (e.g., `pentest_team`) |
-| `mode`        | string   | Team mode (e.g., `coordinate`, `route`, `collaborate`) |
-| `model`       | string   | Provider name for internal logic (same as in agents) |
-| `model-id`    | string   | Model ID used for internal processing |
-| `apikey`      | string   | API key for the team’s model |
-| `instructions`| string   | Multi-line instructions on how the team should collaborate |
-| `members`     | list     | List of agent names (must match agent `name` fields) |
-| `tools`       | toolconfig     | Tools assigned to the agent (`sse` or `stdio` types with required params) |
-| `success_criteria` | string | Configure your teams collaboration success criteria to achieve your goal for the RAI Team task
-
-> ✅ `think: true` is an **optional field** to allow team-wide reasoning before responding.
-
----
-
-## 🧩 Agent Naming Convention
-
-To ensure consistency and compatibility:
-
-- Agent and team `name` fields must:
-  - Be unique across agents and teams
-  - Use only lowercase characters, numbers, `-`, or `_`
-  - Not contain spaces or special characters
-
-✅ **Valid:** `api_pentest_agent`, `web-agent-1`  
-❌ **Invalid:** `Agent 01`, `Web*Pentest`
-
----
-
-## 🔗 Team Member Allocation Rules
-
-- `members` must list agent names **already defined** under the `agents:` section.
-- All member agents **must be valid and fully configured** before referencing them in a team.
-- Duplicate agent names or undeclared agents will raise errors.
-
----
-
-### 🔧 Tools Configuration
-
-Agents or Teams can integrate external or internal MCP tools via yaml configuration:
-
-#### SSE Tool (Server-Sent Events)
-```yaml
-- type: "sse"
-  name: "tool_name"
-  params:
-    url: "http://host:port/endpoint"
-    headers:
-      Authorization: "Bearer your_token_here"
-```
-
-#### Stdio Tool (Local MCP server execution)
-```yaml
-- type: "stdio"
-  name: "tool_name"
-  params:
-    command: "command_to_run (ex:uv)"
-    args: ["arg1", "arg2", "argN"]
-```
 ---
 
 
