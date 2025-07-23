@@ -14,3 +14,4 @@ class TeamConfig:
     think: bool
     apikey: Optional[str] = None
     tools: Optional[List[ToolConfig]] = None
+    num_history_runs: int = 15
