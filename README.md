@@ -19,7 +19,6 @@
     <a href="https://github.com/RevoltSecurities/RAI?tab=readme-ov-file#features">Features</a> |
     <a href="https://github.com/RevoltSecurities/RAI?tab=readme-ov-file#installation">Installation</a> |
     <a href="https://github.com/RevoltSecurities/RAI?tab=readme-ov-file#usage">Usage</a> |
-    <a href="https://github.com/RevoltSecurities/RAI?tab=readme-ov-file#-yaml-configuration">Building Agents & Teams with YAML Configuration</a>
 </p>
 
  <div align="center">
