@@ -112,6 +112,8 @@ class RaiHttpTUIApp(App):
         Binding("ctrl+l", "toggle_subagents", "Subagents", show=False),
         Binding("ctrl+x", "open_editor", "Editor", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
+        Binding("ctrl+shift+c", "copy_selection",     "Copy Selection", show=False),
+        Binding("ctrl+y",       "copy_last_response", "Copy Response",  show=False),
     ]
 
     def __init__(
@@ -1379,6 +1381,31 @@ class RaiHttpTUIApp(App):
                 pass
             return True
         return True
+
+    def action_copy_selection(self) -> None:
+        """Copy current Textual mouse selection to clipboard (ctrl+shift+c)."""
+        try:
+            selected = self.screen.get_selected_text()
+            if selected:
+                self.copy_to_clipboard(selected)
+                self.notify("Copied to clipboard", timeout=1.5)
+            else:
+                self.notify("No text selected — drag to select first",
+                            severity="warning", timeout=2.0)
+        except Exception:
+            pass
+
+    def action_copy_last_response(self) -> None:
+        """Copy last AI response to clipboard (ctrl+y)."""
+        text = ""
+        for w in self.query(AssistantMsg):
+            if w.text:
+                text = w.text
+        if text:
+            self.copy_to_clipboard(text)
+            self.notify("Response copied to clipboard", timeout=1.5)
+        else:
+            self.notify("No response to copy", severity="warning", timeout=1.5)
 
     def action_cancel_run(self) -> None:
         self.run_worker(self._do_cancel_run(), exclusive=False, name="cancel_run")
