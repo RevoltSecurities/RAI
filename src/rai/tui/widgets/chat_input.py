@@ -222,6 +222,12 @@ class InputBar(Widget):
         self._disabled = False
         self._plan_mode = False
         self._skill_commands: list[tuple[str, str]] = []
+        # Prompt history (shell-style Up/Down navigation)
+        self._history: list[str] = []       # newest-first; lazy-loaded
+        self._history_loaded: bool = False
+        self._history_idx: int = -1          # -1 = not navigating
+        self._history_current: str = ""      # text saved when navigation starts
+        self._history_agent: str = "rai"     # tag written to history.jsonl
 
     def compose(self) -> ComposeResult:
         yield Static("❯", id="mode-indicator")
@@ -368,6 +374,17 @@ class InputBar(Widget):
             return
         self._hide_completions()
         self._hide_paste_preview()
+        # Persist real prompts (not slash commands) to ~/.rai/history.jsonl
+        if value and not value.startswith("/"):
+            try:
+                from rai.tui.history import append_history
+                append_history(value, agent=self._history_agent)
+                self._history_loaded = False  # reload on next Up (picks up new entry)
+            except Exception:
+                pass
+        # Reset history navigation state on every submission
+        self._history_idx = -1
+        self._history_current = ""
         inp._pending_paste = ""
         inp._pending_prefix = ""
         inp.clear()
@@ -391,11 +408,56 @@ class InputBar(Widget):
         if self._completions:
             self._comp_idx = (self._comp_idx - 1) % len(self._completions)
             self._render_popup()
+        else:
+            self._navigate_history(-1)
 
     def action_completion_down(self) -> None:
         if self._completions:
             self._comp_idx = (self._comp_idx + 1) % len(self._completions)
             self._render_popup()
+        else:
+            self._navigate_history(1)
+
+    def _navigate_history(self, direction: int) -> None:
+        """Navigate prompt history. direction=-1 → older (Up), +1 → newer (Down)."""
+        if not self._history_loaded:
+            try:
+                from rai.tui.history import load_history
+                self._history = load_history(agent=self._history_agent)
+            except Exception:
+                self._history = []
+            self._history_loaded = True
+
+        if not self._history:
+            return
+
+        try:
+            inp = self.query_one("#chat-input", _ChatInputField)
+        except Exception:
+            return
+
+        if self._history_idx == -1:
+            if direction == -1:
+                # First Up press — save current text, jump to most recent entry
+                self._history_current = inp.value
+                self._history_idx = 0
+            else:
+                return  # already at current, Down does nothing
+        else:
+            new_idx = self._history_idx + direction
+            if new_idx < 0:
+                # Down past most recent → restore what user was typing
+                self._history_idx = -1
+                inp.value = self._history_current
+                inp.cursor_position = len(self._history_current)
+                return
+            if new_idx >= len(self._history):
+                return  # Up past oldest → do nothing
+            self._history_idx = new_idx
+
+        new_value = self._history[self._history_idx]
+        inp.value = new_value
+        inp.cursor_position = len(new_value)
 
     def set_disabled(self, disabled: bool) -> None:
         self._disabled = disabled
