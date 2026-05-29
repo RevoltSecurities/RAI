@@ -31,14 +31,14 @@ from unittest.mock import AsyncMock
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-import rai.local_async_agents as _mod
-from rai.local_async_agents import (
+import rai.agents.background as _mod
+from rai.agents.background import (
     _NOTIF_LOCK,
     _PENDING_NOTIFICATIONS,
     _TASK_REGISTRY,
     _on_done,
 )
-from rai.runner import run_agent
+from rai.engine.runner import run_agent
 
 
 # ---------------------------------------------------------------------------
