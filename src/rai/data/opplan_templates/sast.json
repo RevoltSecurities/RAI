@@ -1,0 +1,106 @@
+[
+  {
+    "title": "Map codebase entry points and attack surface",
+    "phase": "triage",
+    "description": "Identify all user-controlled inputs, external integrations, authentication boundaries, and trust zones in the codebase.",
+    "acceptance_criteria": [
+      "All HTTP endpoints catalogued",
+      "User-controlled input sources identified (query params, headers, body, files)",
+      "External service integrations listed",
+      "Authentication and authorization models documented"
+    ],
+    "framework_refs": ["CWE-20"],
+    "tool_hints": ["semgrep", "grep", "ast-grep", "sourcegraph"],
+    "risk_level": "low",
+    "priority": 1
+  },
+  {
+    "title": "Authentication and authorization code review",
+    "phase": "analysis",
+    "description": "Review authentication flows, session management, and access control implementation for security flaws.",
+    "acceptance_criteria": [
+      "Authentication bypass scenarios evaluated",
+      "Session token entropy and storage reviewed",
+      "Privilege escalation paths identified",
+      "RBAC/ABAC implementation validated"
+    ],
+    "framework_refs": ["OWASP A01:2021", "OWASP A07:2021", "CWE-284", "CWE-287", "CWE-307"],
+    "tool_hints": ["semgrep", "codeql", "manual review"],
+    "risk_level": "high",
+    "priority": 2
+  },
+  {
+    "title": "Injection vulnerability analysis",
+    "phase": "analysis",
+    "description": "Review all database queries, shell commands, template rendering, and serialization for injection vulnerabilities.",
+    "acceptance_criteria": [
+      "All SQL queries verified as parameterized or ORM-based",
+      "Shell command execution reviewed for injection",
+      "Template rendering reviewed for SSTI",
+      "Deserialization sinks identified and reviewed"
+    ],
+    "framework_refs": ["OWASP A03:2021", "CWE-89", "CWE-78", "CWE-94", "CWE-502"],
+    "tool_hints": ["semgrep", "codeql", "bandit", "eslint-plugin-security"],
+    "risk_level": "critical",
+    "priority": 3
+  },
+  {
+    "title": "Cryptography and secrets management review",
+    "phase": "analysis",
+    "description": "Audit cryptographic implementations, secret storage, key management, and sensitive data handling.",
+    "acceptance_criteria": [
+      "No hardcoded secrets or API keys in source",
+      "Password hashing uses bcrypt/argon2/scrypt (no MD5/SHA1)",
+      "TLS configuration reviewed",
+      "Encryption at rest verified for sensitive data"
+    ],
+    "framework_refs": ["OWASP A02:2021", "CWE-798", "CWE-327", "CWE-916"],
+    "tool_hints": ["trufflehog", "gitleaks", "semgrep", "bandit"],
+    "risk_level": "high",
+    "priority": 4
+  },
+  {
+    "title": "Dependency vulnerability audit",
+    "phase": "analysis",
+    "description": "Check all third-party dependencies for known CVEs and supply chain risks.",
+    "acceptance_criteria": [
+      "All dependencies scanned against CVE database",
+      "High/critical CVEs triaged for exploitability",
+      "Outdated packages with security patches identified",
+      "License compliance verified"
+    ],
+    "framework_refs": ["OWASP A06:2021", "CWE-1104"],
+    "tool_hints": ["npm audit", "pip-audit", "safety", "snyk", "dependabot"],
+    "risk_level": "medium",
+    "priority": 5
+  },
+  {
+    "title": "Build PoC for confirmed vulnerabilities",
+    "phase": "validation",
+    "description": "Develop minimal proof-of-concept exploits to confirm SAST findings are exploitable, not just patterns.",
+    "acceptance_criteria": [
+      "PoC developed for each high/critical confirmed finding",
+      "False positives marked and justified",
+      "Exploitability assessed in context of deployment"
+    ],
+    "framework_refs": [],
+    "tool_hints": ["manual testing", "curl", "python"],
+    "risk_level": "high",
+    "priority": 6
+  },
+  {
+    "title": "Generate SAST report with remediation guidance",
+    "phase": "reporting",
+    "description": "Export all confirmed SAST findings with code-level remediation recommendations.",
+    "acceptance_criteria": [
+      "All confirmed findings documented with file:line references",
+      "Remediation code examples provided",
+      "SARIF report generated for CI/CD integration",
+      "False positive rate documented"
+    ],
+    "framework_refs": [],
+    "tool_hints": ["findings_export format=sarif", "findings_export format=markdown"],
+    "risk_level": "low",
+    "priority": 7
+  }
+]

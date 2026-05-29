@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "revolt-rai"
+version = "2.0.0"
+authors = [
+    { name = "D. Sanjai Kumar" },
+]
+maintainers = [
+    { name = "D. Sanjai Kumar", email = "sanjaiz.contact@gmail.com" },
+    { name = "Gokul.V", email = "th3gokul@gmail.com" },
+    { name = "Pugalarasan K", email = "0xpugal@gmail.com" },
+]
+description = "RAI is the open-source AI security operator built for professionals — autonomous, adaptive, and engineered to execute across the full cybersecurity spectrum: from threat modeling and SAST to pentesting, red team, bug bounty, VAPT, and SOC operations."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11,<4.0"
+keywords = ["security", "pentesting", "sast", "bug-bounty", "vapt", "soc", "red-team", "threat-modeling", "incident-response", "threat-hunting", "agents", "ai", "cli", "cybersecurity"]
+dependencies = [
+    # Core agent framework (deepagents SDK + CLI UI)
+    # Pinned exactly — 0.6.x requires langchain>=1.3.2/core>=1.4.0; upgrade when
+    # RAI adopts the run.subagents / AsyncSubagentRunStream streaming API.
+    "deepagents==0.5.3",
+    "deepagents-cli==0.0.41",
+    "langchain>=1.2.15,<2.0.0",
+    "langgraph>=1.1.6,<2.0.0",
+    "langgraph-checkpoint-sqlite>=3.0.0,<4.0.0",
+    # Model providers
+    "langchain-anthropic>=1.4.0,<2.0.0",
+    "langchain-openai>=1.1.12,<2.0.0",
+    "langchain-google-genai>=4.2.1,<5.0.0",
+    "langchain-litellm>=0.6.1,<2.0.0",
+    "langchain-ollama>=1.0.0,<2.0.0",
+    # MCP support (same adapter as deepagents-cli)
+    "langchain-mcp-adapters>=0.2.0,<1.0.0",
+    # UI / Terminal
+    "typer>=0.12.0,<1.0.0",
+    "textual>=8.0.0,<9.0.0",
+    "rich>=14.0.0,<15.0.0",
+    "prompt-toolkit>=3.0.52,<4.0.0",
+    # HTTP client for security tools
+    "httpx>=0.28.1,<1.0.0",
+    # HTTP server for rai chat / rai serve
+    "fastapi>=0.115.0,<1.0.0",
+    "uvicorn[standard]>=0.30.0,<1.0.0",
+    # Web search / page extraction
+    "duckduckgo-search>=6.0.0,<8.0.0",
+    "trafilatura>=2.0.0,<3.0.0",
+    # Utilities
+    "python-dotenv>=1.0.0,<2.0.0",
+    "pyyaml>=6.0.0",
+    "tomli-w>=1.0.0,<2.0.0",
+    "packaging>=23.0",
+    "uuid-utils>=0.10.0,<1.0.0",
+]
+
+[project.optional-dependencies]
+# Extra model providers
+openrouter = ["langchain-openrouter>=0.2.0,<2.0.0"]
+bedrock = ["langchain-aws>=1.0.0,<2.0.0"]
+groq = ["langchain-groq>=1.0.0,<2.0.0"]
+all-providers = ["revolt-rai[openrouter,bedrock,groq]"]
+
+[project.scripts]
+rai = "rai.cli.main:app"
+
+[project.urls]
+Repository = "https://github.com/RevoltSecurities/RAI"
+
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rai"]
+include = ["static/**"]
+
+[tool.hatch.build.targets.sdist]
+include = ["static/**"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,0 +1,93 @@
+[
+  {
+    "title": "Cloud asset inventory and discovery",
+    "phase": "discovery",
+    "description": "Enumerate all cloud resources across accounts, regions, and services to build a complete asset inventory.",
+    "acceptance_criteria": [
+      "All active cloud accounts/subscriptions identified",
+      "Resource inventory generated per region",
+      "Publicly exposed resources flagged",
+      "Cost anomalies that may indicate unauthorized activity reviewed"
+    ],
+    "framework_refs": ["T1526", "T1580"],
+    "tool_hints": ["aws cli", "az cli", "gcloud", "scout suite", "prowler", "nuclei"],
+    "risk_level": "low",
+    "priority": 1
+  },
+  {
+    "title": "IAM permissions and privilege audit",
+    "phase": "access-review",
+    "description": "Audit identity and access management — over-permissive roles, unused permissions, service account risks.",
+    "acceptance_criteria": [
+      "Admin/root account usage reviewed",
+      "Over-permissive IAM policies identified (wildcard *, AdministratorAccess)",
+      "Service accounts with human-equivalent permissions identified",
+      "MFA enforcement status for all users verified",
+      "Unused access keys and credentials identified"
+    ],
+    "framework_refs": ["CIS AWS Foundations", "T1078.004", "OWASP Cloud Top 10"],
+    "tool_hints": ["aws iam", "az role assignments", "gcloud iam", "cloudsplaining", "pmapper"],
+    "risk_level": "high",
+    "priority": 2
+  },
+  {
+    "title": "Storage and data exposure review",
+    "phase": "config-review",
+    "description": "Identify publicly accessible storage buckets, databases, and sensitive data exposure.",
+    "acceptance_criteria": [
+      "All storage buckets/containers checked for public access",
+      "Publicly accessible databases identified",
+      "Sensitive data (PII, secrets) in storage reviewed",
+      "Server-side encryption verified for sensitive data stores"
+    ],
+    "framework_refs": ["CWE-200", "T1530", "OWASP Cloud-06"],
+    "tool_hints": ["aws s3api", "az storage", "gcloud storage", "s3scanner", "pacu"],
+    "risk_level": "critical",
+    "priority": 3
+  },
+  {
+    "title": "Network security and configuration review",
+    "phase": "config-review",
+    "description": "Audit network security groups, firewall rules, VPC configuration, and internet exposure.",
+    "acceptance_criteria": [
+      "Overly permissive security groups (0.0.0.0/0) identified",
+      "Unnecessary internet-facing services documented",
+      "VPC peering and network segmentation reviewed",
+      "Load balancer and CDN security configurations checked"
+    ],
+    "framework_refs": ["CIS AWS Foundations", "T1133"],
+    "tool_hints": ["aws ec2 describe-security-groups", "az network nsg", "nmap", "nuclei"],
+    "risk_level": "high",
+    "priority": 4
+  },
+  {
+    "title": "Secrets and sensitive data scanning",
+    "phase": "data-exposure",
+    "description": "Scan for hardcoded secrets, API keys, and credentials in code repositories, environment variables, and metadata.",
+    "acceptance_criteria": [
+      "All code repositories scanned for leaked secrets",
+      "EC2/VM instance metadata API tested for credential exposure",
+      "Environment variables and configuration files reviewed",
+      "Secrets manager usage assessed vs hardcoded secrets"
+    ],
+    "framework_refs": ["CWE-798", "T1552", "T1552.005"],
+    "tool_hints": ["trufflehog", "gitleaks", "aws metadata", "trivy"],
+    "risk_level": "critical",
+    "priority": 5
+  },
+  {
+    "title": "Generate cloud security assessment report",
+    "phase": "reporting",
+    "description": "Export all cloud security findings with CIS Benchmark and compliance framework mapping.",
+    "acceptance_criteria": [
+      "All findings mapped to CIS Benchmarks or relevant compliance framework",
+      "Remediation priority assigned (immediate/short-term/long-term)",
+      "Quick wins (high impact, low effort) highlighted",
+      "Report exported in requested format"
+    ],
+    "framework_refs": ["CIS AWS Foundations", "CIS Azure Foundations"],
+    "tool_hints": ["findings_export"],
+    "risk_level": "low",
+    "priority": 6
+  }
+]

@@ -1,0 +1,234 @@
+/* RAI HTTP TUI — enterprise UI, Claude Code visual language */
+
+/* ---- Base ---- */
+Screen {
+    background: $background;
+    layers: base autocomplete;
+}
+
+/* ---- Chat area ---- */
+#chat {
+    height: 1fr;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+#messages {
+    height: auto;
+    layout: vertical;
+}
+
+/* ---- Message blocks ---- */
+UserMsg {
+    padding: 0 1;
+    margin: 0 0 1 0;
+    color: $text;
+    height: auto;
+}
+
+AssistantMsg {
+    padding: 0 1;
+    margin: 0 0 1 0;
+    background: transparent;
+    height: auto;
+}
+
+ThinkingMsg {
+    height: auto;
+    margin: 0 0 0 2;
+}
+
+ThinkingMsg Static {
+    color: $text-muted 60%;
+    text-style: italic;
+}
+
+/* ---- Tool calls — Claude Code style (glyph + name(args) / tree output) ---- */
+ToolCallMsg {
+    margin: 0 0 0 2;
+    padding: 0;
+    height: auto;
+    background: transparent;
+}
+
+ToolCallMsg #tool-header {
+    height: auto;
+}
+
+ToolCallMsg #tool-output {
+    margin: 0 0 1 4;
+    color: $text-muted;
+    height: auto;
+}
+
+/* ---- Subagent group — subtle left border to group nested tools ---- */
+SubagentGroup {
+    border-left: thick $success 35%;
+    padding: 0 0 0 2;
+    margin: 0 0 1 2;
+    background: $surface 15%;
+    height: auto;
+}
+
+/* ---- Input bar ---- */
+#input-bar {
+    height: auto;
+    min-height: 3;
+    max-height: 20;
+    border: round $accent 40%;
+    background: $surface 30%;
+    padding: 0 1;
+    layout: horizontal;
+}
+
+#input-bar:focus-within {
+    border: round $accent;
+    background: $surface 50%;
+}
+
+/* Plan mode — amber border + glyph */
+#input-bar.plan-mode {
+    border: round yellow 70%;
+    background: $surface 40%;
+}
+
+#input-bar.plan-mode:focus-within {
+    border: round yellow;
+}
+
+#chat-input {
+    border: none;
+    background: transparent;
+    width: 1fr;
+    height: auto;
+}
+
+/* ---- Completion popup ---- */
+#completion-popup {
+    layer: autocomplete;
+    display: none;
+    height: auto;
+    max-height: 10;
+    background: $surface 95%;
+    border: round $accent;
+    margin: 0 0 0 4;
+}
+
+/* ---- Plan panel ---- */
+#plan-panel {
+    display: none;
+    height: auto;
+    max-height: 40%;
+    background: $surface 90%;
+    border: round $warning 70%;
+    padding: 1 2;
+}
+
+/* ---- HITL panel ---- */
+#hitl-panel {
+    height: auto;
+    max-height: 50%;
+    background: $surface 90%;
+    border: round $warning 80%;
+    padding: 1 2;
+}
+
+.hitl-hidden {
+    display: none;
+}
+
+/* ---- Ask-user panel ---- */
+#ask-user-panel {
+    display: none;
+    max-height: 20;
+    background: $surface 92%;
+    border: round $accent 40%;
+    padding: 0 1;
+}
+
+#ask-user-panel.panel-open {
+    display: block;
+    height: auto;
+}
+
+#ask-user-panel #ask-user-header {
+    color: $accent;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#ask-user-panel #ask-user-footer {
+    color: $text-muted;
+    margin-top: 1;
+}
+
+#ask-user-panel .ask-user-q-label {
+    margin-top: 1;
+    color: $text;
+}
+
+#ask-user-panel Input {
+    margin: 0 0 0 0;
+    border: tall $accent 40%;
+}
+
+#ask-user-panel Input:focus {
+    border: tall $accent;
+}
+
+/* ---- Background runs panel (replaces bg-runs-bar) ---- */
+#bg-runs-panel {
+    display: none;
+    max-height: 14;
+    background: $surface 90%;
+    border: round $accent 40%;
+    padding: 0 1;
+}
+
+#bg-runs-panel.panel-open {
+    display: block;
+    height: auto;
+}
+
+/* ---- Subagent tree ---- */
+#subagent-tree {
+    display: none;
+    height: auto;
+    max-height: 8;
+    background: $surface 25%;
+    border-left: thick $success 40%;
+    padding: 0 1;
+}
+
+/* ---- Header ---- */
+#header {
+    height: 1;
+    background: $primary 30%;
+    border-bottom: solid $accent 20%;
+    padding: 0 2;
+    layout: horizontal;
+}
+
+/* ---- Banner ---- */
+.banner {
+    height: auto;
+    margin: 1 2 2 2;
+    color: $accent;
+}
+
+/* ---- System messages ---- */
+.sys-msg {
+    height: auto;
+    margin: 0 2 1 2;
+    color: $text-muted 70%;
+    text-style: italic;
+}
+
+/* ---- Status bar ---- */
+#status-bar {
+    height: 1;
+    background: $surface 40%;
+    border-top: solid $accent 20%;
+    padding: 0 1;
+    layout: horizontal;
+}
