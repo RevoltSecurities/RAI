@@ -1,0 +1,106 @@
+[
+  {
+    "title": "Discover and map all API endpoints",
+    "phase": "discovery",
+    "description": "Enumerate all API endpoints through OpenAPI/Swagger specs, JavaScript parsing, brute force, and documentation review.",
+    "acceptance_criteria": [
+      "Complete endpoint inventory created (method, path, parameters)",
+      "OpenAPI/Swagger specification obtained or generated",
+      "Undocumented endpoints discovered through active brute force",
+      "API versioning and deprecated endpoints identified"
+    ],
+    "framework_refs": ["OWASP API1:2023"],
+    "tool_hints": ["ffuf", "burpsuite", "kiterunner", "swagger-parser"],
+    "risk_level": "low",
+    "priority": 1
+  },
+  {
+    "title": "Authentication mechanism testing",
+    "phase": "auth-testing",
+    "description": "Test all API authentication schemes: JWT, OAuth2, API keys, Basic Auth for vulnerabilities.",
+    "acceptance_criteria": [
+      "JWT signature validation tested (none algorithm, weak secret)",
+      "Token expiry and revocation verified",
+      "API key entropy and rotation policy assessed",
+      "OAuth2 flows tested for authorization code injection and CSRF"
+    ],
+    "framework_refs": ["OWASP API2:2023", "CWE-287", "CWE-347"],
+    "tool_hints": ["jwt_tool", "burpsuite", "curl"],
+    "risk_level": "critical",
+    "priority": 2
+  },
+  {
+    "title": "Broken Object Level Authorization (BOLA/IDOR) testing",
+    "phase": "auth-testing",
+    "description": "Test every endpoint with object identifiers for BOLA — accessing or modifying other users' resources.",
+    "acceptance_criteria": [
+      "All endpoints with object IDs tested for BOLA",
+      "Horizontal privilege escalation confirmed or ruled out",
+      "UUID/GUID vs sequential ID exposure assessed",
+      "Mass assignment vulnerabilities tested"
+    ],
+    "framework_refs": ["OWASP API1:2023", "OWASP API3:2023", "CWE-639"],
+    "tool_hints": ["burpsuite autorize", "postman", "curl"],
+    "risk_level": "critical",
+    "priority": 3
+  },
+  {
+    "title": "Broken Function Level Authorization (BFLA) testing",
+    "phase": "auth-testing",
+    "description": "Test for vertical privilege escalation — low-privilege users accessing admin or privileged functions.",
+    "acceptance_criteria": [
+      "Admin endpoints tested with user-level tokens",
+      "HTTP method manipulation tested (GET→POST, etc.)",
+      "Role-based access control enforcement verified",
+      "Function-level authorization bypass scenarios explored"
+    ],
+    "framework_refs": ["OWASP API5:2023", "CWE-284"],
+    "tool_hints": ["burpsuite", "postman", "curl"],
+    "risk_level": "high",
+    "priority": 4
+  },
+  {
+    "title": "Input validation and injection testing",
+    "phase": "data-testing",
+    "description": "Test all API parameters for injection, schema validation bypass, and excessive data exposure.",
+    "acceptance_criteria": [
+      "All parameters fuzzed for injection vulnerabilities",
+      "GraphQL introspection and injection tested if applicable",
+      "Excessive data exposure tested (sensitive fields in responses)",
+      "Mass assignment tested on all write endpoints"
+    ],
+    "framework_refs": ["OWASP API3:2023", "OWASP API8:2023", "CWE-89", "CWE-20"],
+    "tool_hints": ["burpsuite intruder", "postman", "graphqlmap", "sqlmap"],
+    "risk_level": "high",
+    "priority": 5
+  },
+  {
+    "title": "Rate limiting and business logic abuse",
+    "phase": "logic-testing",
+    "description": "Test API rate limiting, quota enforcement, and business logic for abuse scenarios.",
+    "acceptance_criteria": [
+      "Rate limiting tested and bypass attempts documented",
+      "Expensive endpoints tested for DoS potential",
+      "Business logic abuse scenarios identified and tested",
+      "Resource consumption limits verified"
+    ],
+    "framework_refs": ["OWASP API4:2023", "OWASP API6:2023"],
+    "tool_hints": ["burpsuite intruder", "wrk", "ab", "locust"],
+    "risk_level": "medium",
+    "priority": 6
+  },
+  {
+    "title": "Generate API security report",
+    "phase": "reporting",
+    "description": "Export all confirmed API security findings with OWASP API Top 10 categorization.",
+    "acceptance_criteria": [
+      "All findings mapped to OWASP API Security Top 10",
+      "Remediation recommendations provided per finding",
+      "Report exported in requested format"
+    ],
+    "framework_refs": ["OWASP API Security Top 10:2023"],
+    "tool_hints": ["findings_export"],
+    "risk_level": "low",
+    "priority": 7
+  }
+]

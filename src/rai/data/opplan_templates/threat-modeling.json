@@ -1,0 +1,91 @@
+[
+  {
+    "title": "Define system scope, architecture, and data flows",
+    "phase": "scope",
+    "description": "Document the system architecture, trust boundaries, data flows, and external dependencies to establish threat modeling scope.",
+    "acceptance_criteria": [
+      "Architecture diagram created or reviewed",
+      "Data flow diagram (DFD) completed",
+      "Trust boundaries identified and documented",
+      "All external integrations and data stores listed",
+      "User roles and privilege levels documented"
+    ],
+    "framework_refs": ["STRIDE"],
+    "tool_hints": ["draw.io", "mermaid", "web_fetch", "memory_write"],
+    "risk_level": "low",
+    "priority": 1
+  },
+  {
+    "title": "STRIDE threat enumeration per component",
+    "phase": "identification",
+    "description": "Apply STRIDE (Spoofing, Tampering, Repudiation, Information Disclosure, Denial of Service, Elevation of Privilege) to each component and data flow.",
+    "acceptance_criteria": [
+      "All 6 STRIDE categories evaluated for each component",
+      "Each applicable threat recorded as an objective or finding",
+      "Threat actors and attack motivations documented per threat"
+    ],
+    "framework_refs": ["STRIDE-S", "STRIDE-T", "STRIDE-R", "STRIDE-I", "STRIDE-D", "STRIDE-E"],
+    "tool_hints": ["memory_write", "findings_add"],
+    "risk_level": "medium",
+    "priority": 2
+  },
+  {
+    "title": "Risk scoring and prioritization",
+    "phase": "analysis",
+    "description": "Score each identified threat by likelihood and impact. Prioritize by risk score for remediation planning.",
+    "acceptance_criteria": [
+      "Likelihood score (1-5) assigned to each threat",
+      "Impact score (1-5) assigned to each threat",
+      "Risk = Likelihood × Impact calculated",
+      "Top 10 risks identified and highlighted"
+    ],
+    "framework_refs": ["DREAD", "CVSS"],
+    "tool_hints": ["findings_add", "memory_write"],
+    "risk_level": "medium",
+    "priority": 3
+  },
+  {
+    "title": "Identify existing controls and coverage gaps",
+    "phase": "analysis",
+    "description": "For each identified threat, assess whether adequate security controls exist. Document gaps where threats are insufficiently mitigated.",
+    "acceptance_criteria": [
+      "Existing controls mapped to identified threats",
+      "Coverage gaps documented per threat category",
+      "Defense-in-depth assessment completed"
+    ],
+    "framework_refs": ["NIST CSF", "CIS Controls"],
+    "tool_hints": ["web_search", "memory_write"],
+    "risk_level": "medium",
+    "priority": 4
+  },
+  {
+    "title": "Define mitigations and security controls",
+    "phase": "mitigation",
+    "description": "Recommend concrete mitigations for each identified threat gap, prioritized by risk score.",
+    "acceptance_criteria": [
+      "Specific mitigation recommendation for each high-risk threat",
+      "Implementation effort estimated (low/medium/high)",
+      "Quick wins (high impact, low effort) highlighted",
+      "Long-term architecture improvements identified"
+    ],
+    "framework_refs": ["OWASP SAMM", "NIST SP 800-53"],
+    "tool_hints": ["web_search", "memory_write"],
+    "risk_level": "low",
+    "priority": 5
+  },
+  {
+    "title": "Generate threat model document",
+    "phase": "reporting",
+    "description": "Produce a comprehensive threat model document including scope, identified threats, risk ratings, and mitigations.",
+    "acceptance_criteria": [
+      "Executive summary written for stakeholders",
+      "All threats documented with STRIDE category, risk score, and mitigation",
+      "Document saved to memory for future reference",
+      "Action items assigned with owners and timelines"
+    ],
+    "framework_refs": [],
+    "tool_hints": ["findings_export", "memory_write"],
+    "risk_level": "low",
+    "priority": 6
+  }
+]

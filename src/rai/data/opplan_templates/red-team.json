@@ -1,0 +1,106 @@
+[
+  {
+    "title": "OSINT and passive reconnaissance",
+    "phase": "recon",
+    "description": "Gather intelligence about the target using only open-source and passive techniques — no direct contact with target systems.",
+    "acceptance_criteria": [
+      "Organizational structure and key personnel identified",
+      "Technology stack inferred from public sources",
+      "Email format and domains enumerated",
+      "Exposed credentials or leaked data checked",
+      "Public-facing infrastructure mapped"
+    ],
+    "framework_refs": ["T1589", "T1590", "T1591", "T1592", "T1593", "T1594"],
+    "tool_hints": ["theHarvester", "maltego", "shodan", "web_search", "web_fetch"],
+    "risk_level": "low",
+    "priority": 1
+  },
+  {
+    "title": "Active infrastructure enumeration",
+    "phase": "recon",
+    "description": "Actively enumerate target network ranges, domains, subdomains, and exposed services.",
+    "acceptance_criteria": [
+      "All in-scope IPs and subdomains enumerated",
+      "Open ports and running services documented",
+      "VPN, remote access, and edge services identified",
+      "Cloud infrastructure and S3/blob storage enumerated"
+    ],
+    "framework_refs": ["T1595", "T1046", "T1018"],
+    "tool_hints": ["nmap", "masscan", "amass", "subfinder", "nuclei"],
+    "risk_level": "medium",
+    "priority": 2
+  },
+  {
+    "title": "Initial access — exploit entry point",
+    "phase": "initial-access",
+    "description": "Exploit the identified attack vector to gain initial foothold. Document the vulnerability and proof of access.",
+    "acceptance_criteria": [
+      "Initial access confirmed with shell or credential access",
+      "Exploitation method documented with request/response PoC",
+      "Access level (user/service/admin) documented",
+      "Persistence mechanism considered before proceeding"
+    ],
+    "framework_refs": ["T1190", "T1133", "T1078", "T1566"],
+    "tool_hints": ["metasploit", "burpsuite", "nuclei", "custom exploit"],
+    "risk_level": "critical",
+    "priority": 3
+  },
+  {
+    "title": "Establish persistence",
+    "phase": "persistence",
+    "description": "Establish a reliable, durable foothold that survives reboots and security response.",
+    "acceptance_criteria": [
+      "Persistence mechanism established and tested",
+      "Backdoor/implant documented for cleanup",
+      "Detection risk assessed and documented"
+    ],
+    "framework_refs": ["T1053", "T1543", "T1078", "T1098"],
+    "tool_hints": ["cron", "systemd", "registry", "ssh keys"],
+    "risk_level": "critical",
+    "priority": 4
+  },
+  {
+    "title": "Lateral movement and internal reconnaissance",
+    "phase": "lateral-movement",
+    "description": "Move through the internal network to reach high-value targets. Map internal network and trust relationships.",
+    "acceptance_criteria": [
+      "Internal network topology mapped",
+      "Additional credentials or access tokens discovered",
+      "Lateral movement path documented hop-by-hop",
+      "High-value targets (Domain Controllers, DBs, secrets vaults) identified"
+    ],
+    "framework_refs": ["T1021", "T1550", "T1557", "T1135"],
+    "tool_hints": ["bloodhound", "impacket", "crackmapexec", "nmap"],
+    "risk_level": "critical",
+    "priority": 5
+  },
+  {
+    "title": "Objective completion and data collection simulation",
+    "phase": "exfiltration",
+    "description": "Reach and demonstrate access to defined engagement objectives (crown jewels, sensitive data, domain admin).",
+    "acceptance_criteria": [
+      "Engagement crown jewel accessed with screenshot/proof",
+      "Simulated exfiltration technique documented",
+      "Cleanup plan prepared for all implants and artifacts"
+    ],
+    "framework_refs": ["T1005", "T1039", "T1041", "T1486"],
+    "tool_hints": ["custom scripts", "exfil simulation only — no real data taken"],
+    "risk_level": "critical",
+    "priority": 6
+  },
+  {
+    "title": "Cleanup and generate engagement report",
+    "phase": "reporting",
+    "description": "Remove all red team artifacts, backdoors, and implants. Generate full engagement report.",
+    "acceptance_criteria": [
+      "All persistence mechanisms removed and verified",
+      "All implants and backdoors cleaned up",
+      "Full kill chain documented with ATT&CK mapping",
+      "Detection gaps documented with blue team recommendations"
+    ],
+    "framework_refs": [],
+    "tool_hints": ["findings_export", "memory_write"],
+    "risk_level": "low",
+    "priority": 7
+  }
+]

@@ -1,0 +1,379 @@
+# Kill-chain phase → tool mapping (committed fallback).
+# Canonical phase names: recon, weaponization, delivery, exploitation,
+# persistence, privilege-escalation, defense-evasion, credential-access,
+# discovery, lateral-movement, collection, command-and-control,
+# exfiltration, impact.
+#
+# Kept intentionally small and opinionated. Overlaid at runtime by the
+# parsed RedTeam-Tools README when the cache is hydrated.
+
+# ── Recon ──────────────────────────────────────────────────────────────
+- name: nmap
+  phase: recon
+  description: The canonical port scanner and service identifier.
+  url: https://nmap.org
+
+
+- name: masscan
+  phase: recon
+  description: Internet-scale asynchronous port scanner.
+  url: https://github.com/robertdavidgraham/masscan
+
+- name: rustscan
+  phase: recon
+  description: Fast port scanner that hands off to nmap.
+  url: https://github.com/RustScan/RustScan
+
+- name: subfinder
+  phase: recon
+  description: Passive subdomain discovery from public sources.
+  url: https://github.com/projectdiscovery/subfinder
+
+- name: subdominator
+  phase: recon
+  descritpion: Passive subdomain enumeration tool
+  url: https://github.com/RevoltSecurities/Subdominator
+
+- name: amass
+  phase: recon
+  description: Attack surface mapping and external asset discovery.
+  url: https://github.com/owasp-amass/amass
+
+- name: httpx
+  phase: recon
+  description: Fast HTTP prober and fingerprinter.
+  url: https://github.com/projectdiscovery/httpx
+
+- name: subprober
+  phase: recon
+  description: Asynchronous HTTP Probing and fingerprinter.
+  url: https://github.com/RevoltSecurities/subprober
+
+- name: katana
+  phase: recon
+  description: Next-gen web crawler for attack surface discovery.
+  url: https://github.com/projectdiscovery/katana
+
+- name: dnsx
+  phase: recon
+  description: Fast DNS resolver and brute-forcer.
+  url: https://github.com/projectdiscovery/dnsx
+
+- name: whatweb
+  phase: recon
+  description: Identifies CMS, frameworks, and web technologies.
+  url: https://github.com/urbanadventurer/WhatWeb
+
+- name: wafw00f
+  phase: recon
+  description: Detects WAFs in front of a target.
+  url: https://github.com/EnableSecurity/wafw00f
+
+- name: theharvester
+  phase: recon
+  description: Emails, subdomains, and names from public sources.
+  url: https://github.com/laramies/theHarvester
+
+- name: shodan
+  phase: recon
+  description: Internet-wide search engine for services and banners.
+  url: https://www.shodan.io
+
+- name: fierce
+  phase: recon
+  description: DNS reconnaissance and subdomain sweeping.
+  url: https://github.com/mschwager/fierce
+
+# ── Exploitation ───────────────────────────────────────────────────────
+- name: nuclei
+  phase: exploitation
+  description: Template-based vulnerability scanner.
+  url: https://github.com/projectdiscovery/nuclei
+
+- name: sqlmap
+  phase: exploitation
+  description: Automated SQL injection exploitation.
+  url: https://github.com/sqlmapproject/sqlmap
+
+- name: ffuf
+  phase: exploitation
+  description: Fast web fuzzer for directories and parameters.
+  url: https://github.com/ffuf/ffuf
+
+- name: gobuster
+  phase: exploitation
+  description: Directory / DNS / vhost brute-forcer.
+  url: https://github.com/OJ/gobuster
+
+- name: dirsearch
+  phase: exploitation
+  description: Advanced web path brute-forcer.
+  url: https://github.com/maurosoria/dirsearch
+
+- name: nikto
+  phase: exploitation
+  description: Web server vulnerability scanner.
+  url: https://github.com/sullo/nikto
+
+- name: testssl
+  phase: exploitation
+  description: Tests TLS/SSL ciphers, flaws, and protocol support.
+  url: https://github.com/drwetter/testssl.sh
+
+- name: sliver
+  phase: exploitation
+  description: Open-source adversary emulation / red team framework.
+  url: https://github.com/BishopFox/sliver
+
+# ── Credential Access ──────────────────────────────────────────────────
+- name: hashcat
+  phase: credential-access
+  description: GPU-accelerated password cracker.
+  url: https://hashcat.net/hashcat/
+
+- name: john
+  phase: credential-access
+  description: John the Ripper password cracker.
+  url: https://www.openwall.com/john/
+
+- name: hydra
+  phase: credential-access
+  description: Online login brute-forcer across many protocols.
+  url: https://github.com/vanhauser-thc/thc-hydra
+
+- name: medusa
+  phase: credential-access
+  description: Parallel network login brute-forcer.
+  url: http://foofus.net/goons/jmk/medusa/medusa.html
+
+- name: patator
+  phase: credential-access
+  description: Multi-purpose brute-forcer with a modular architecture.
+  url: https://github.com/lanjelot/patator
+
+- name: impacket-GetNPUsers
+  phase: credential-access
+  description: AS-REP roasting of users without Kerberos pre-auth.
+  url: https://github.com/fortra/impacket
+
+- name: impacket-GetUserSPNs
+  phase: credential-access
+  description: Kerberoasting — request SPN tickets for cracking.
+  url: https://github.com/fortra/impacket
+
+- name: crackmapexec
+  phase: credential-access
+  description: Swiss-army knife for attacking AD / SMB / WinRM.
+  url: https://github.com/Porchetta-Industries/CrackMapExec
+
+- name: netexec
+  phase: credential-access
+  description: Successor to CrackMapExec — network service exploitation.
+  url: https://github.com/Pennyw0rth/NetExec
+
+- name: kerbrute
+  phase: credential-access
+  description: Kerberos username enumeration and brute-force.
+  url: https://github.com/ropnop/kerbrute
+
+- name: certipy
+  phase: credential-access
+  description: AD CS enumeration and abuse tool.
+  url: https://github.com/ly4k/Certipy
+
+# ── Discovery ──────────────────────────────────────────────────────────
+- name: bloodhound
+  phase: discovery
+  description: AD attack-path visualisation via graph analysis.
+  url: https://github.com/BloodHoundAD/BloodHound
+
+- name: sharphound
+  phase: discovery
+  description: C# data collector for BloodHound.
+  url: https://github.com/BloodHoundAD/SharpHound
+
+- name: ldapsearch
+  phase: discovery
+  description: Query LDAP directories directly from the CLI.
+  url: https://linux.die.net/man/1/ldapsearch
+
+- name: enum4linux-ng
+  phase: discovery
+  description: Enumerates SMB shares, users, and groups.
+  url: https://github.com/cddmp/enum4linux-ng
+
+- name: adidnsdump
+  phase: discovery
+  description: Dumps Active Directory integrated DNS zones.
+  url: https://github.com/dirkjanm/adidnsdump
+
+# ── Lateral Movement ───────────────────────────────────────────────────
+- name: evil-winrm
+  phase: lateral-movement
+  description: Interactive WinRM shell with credential options.
+  url: https://github.com/Hackplayers/evil-winrm
+
+- name: psexec.py
+  phase: lateral-movement
+  description: Impacket PsExec for remote command execution.
+  url: https://github.com/fortra/impacket
+
+- name: wmiexec.py
+  phase: lateral-movement
+  description: WMI-based command execution without writing files.
+  url: https://github.com/fortra/impacket
+
+- name: smbexec.py
+  phase: lateral-movement
+  description: SMB-based command execution with service install.
+  url: https://github.com/fortra/impacket
+
+- name: dcomexec.py
+  phase: lateral-movement
+  description: DCOM-based command execution.
+  url: https://github.com/fortra/impacket
+
+- name: chisel
+  phase: lateral-movement
+  description: Fast TCP/UDP tunnel over HTTP.
+  url: https://github.com/jpillora/chisel
+
+- name: ligolo-ng
+  phase: lateral-movement
+  description: Advanced tunnelling through pivot hosts.
+  url: https://github.com/nicocha30/ligolo-ng
+
+# ── Privilege Escalation ───────────────────────────────────────────────
+- name: linpeas
+  phase: privilege-escalation
+  description: Linux privilege escalation enumeration script.
+  url: https://github.com/carlospolop/PEASS-ng
+
+- name: winpeas
+  phase: privilege-escalation
+  description: Windows privilege escalation enumeration script.
+  url: https://github.com/carlospolop/PEASS-ng
+
+- name: linux-exploit-suggester
+  phase: privilege-escalation
+  description: Suggests kernel exploits based on installed kernel.
+  url: https://github.com/mzet-/linux-exploit-suggester
+
+- name: windows-exploit-suggester
+  phase: privilege-escalation
+  description: Matches a Windows patch level to missing KB-level exploits.
+  url: https://github.com/AonCyberLabs/Windows-Exploit-Suggester
+
+- name: rubeus
+  phase: privilege-escalation
+  description: Kerberos interaction and abuses (tickets, S4U, PAC).
+  url: https://github.com/GhostPack/Rubeus
+
+- name: ad-miner
+  phase: privilege-escalation
+  description: AD attack path analysis against BloodHound data.
+  url: https://github.com/Mazars-Tech/AD_Miner
+
+# ── Persistence ────────────────────────────────────────────────────────
+- name: sharppersist
+  phase: persistence
+  description: Windows persistence toolkit with many techniques.
+  url: https://github.com/mandiant/SharPersist
+
+- name: pspy
+  phase: persistence
+  description: Monitor Linux processes without root — spot cron jobs.
+  url: https://github.com/DominicBreuker/pspy
+
+# ── Defense Evasion ────────────────────────────────────────────────────
+- name: obfuscator-llvm
+  phase: defense-evasion
+  description: LLVM pass to obfuscate binaries at compile time.
+  url: https://github.com/obfuscator-llvm/obfuscator
+
+- name: donut
+  phase: defense-evasion
+  description: Generates position-independent shellcode from PE/exe.
+  url: https://github.com/TheWover/donut
+
+- name: freeze
+  phase: defense-evasion
+  description: Payload toolkit for EDR bypass using suspended processes.
+  url: https://github.com/optiv/Freeze
+
+- name: threadless-inject
+  phase: defense-evasion
+  description: Threadless process injection technique.
+  url: https://github.com/CCob/ThreadlessInject
+
+# ── Command and Control ────────────────────────────────────────────────
+- name: sliver
+  phase: command-and-control
+  description: Open-source cross-platform C2 framework.
+  url: https://github.com/BishopFox/sliver
+
+- name: mythic
+  phase: command-and-control
+  description: Collaborative multi-agent C2 framework.
+  url: https://github.com/its-a-feature/Mythic
+
+- name: havoc
+  phase: command-and-control
+  description: Modern and malleable C2 framework.
+  url: https://github.com/HavocFramework/Havoc
+
+- name: villain
+  phase: command-and-control
+  description: High-level stage-1 C2 with multi-session support.
+  url: https://github.com/t3l3machus/Villain
+
+# ── Exfiltration ───────────────────────────────────────────────────────
+- name: rclone
+  phase: exfiltration
+  description: Cloud storage sync — fast exfil when egress allows it.
+  url: https://rclone.org
+
+- name: dnsexfil
+  phase: exfiltration
+  description: DNS-based exfiltration of arbitrary data.
+  url: https://github.com/m57/dnsteal
+
+# ── Weaponization / Delivery ───────────────────────────────────────────
+- name: msfvenom
+  phase: weaponization
+  description: Payload generator (not msfconsole). Legacy only.
+  url: https://docs.metasploit.com
+
+- name: gophish
+  phase: delivery
+  description: Phishing campaign framework with tracking UI.
+  url: https://github.com/gophish/gophish
+
+- name: evilginx2
+  phase: delivery
+  description: Man-in-the-middle phishing framework for MFA bypass.
+  url: https://github.com/kgretzky/evilginx2
+
+# ── Collection ─────────────────────────────────────────────────────────
+- name: lazagne
+  phase: collection
+  description: Retrieves credentials stored on a local host.
+  url: https://github.com/AlessandroZ/LaZagne
+
+- name: mimikatz
+  phase: collection
+  description: Dumps Windows credentials from memory.
+  url: https://github.com/gentilkiwi/mimikatz
+
+# ── Impact ─────────────────────────────────────────────────────────────
+- name: diskshadow
+  phase: impact
+  description: Windows volume shadow copy manipulation.
+  url: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/diskshadow
+
+# ── API ─────────────────────────────────────────────────────────────
+
+- name: apistrike
+  phase: api EnableSecurity
+  description: Ultimate API Security Scanner 
+  url: https://github.com/RevoltSecurities/apistrike
