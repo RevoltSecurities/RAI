@@ -10,6 +10,7 @@ on:
       - 'v*'
   workflow_dispatch:
 
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
@@ -46,7 +47,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=long
             type=edge,branch=main
-            type=raw,value=latest,enable={{is_default_branch}}
+            latest
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5

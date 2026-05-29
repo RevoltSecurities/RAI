@@ -259,8 +259,16 @@ async def execute_run(
                             elif total_toks:
                                 _usage_accum["input_tokens"] += total_toks
                             details = usage.get("input_token_details", {}) or {}
-                            _usage_accum["cache_creation_tokens"] += details.get("cache_creation", 0)
-                            _usage_accum["cache_read_tokens"] += details.get("cache_read", 0)
+                            # langchain-anthropic ≥1.4.4 zeroes out "cache_creation" when
+                            # TTL-based caching is used (ttl:"5m"/"1h") and puts the real
+                            # value in "ephemeral_5m_input_tokens"/"ephemeral_1h_input_tokens".
+                            # Fall back to the old "cache_creation" key for older SDK versions.
+                            _cache_creation = (
+                                (details.get("ephemeral_5m_input_tokens") or 0)
+                                + (details.get("ephemeral_1h_input_tokens") or 0)
+                            ) or (details.get("cache_creation") or 0)
+                            _usage_accum["cache_creation_tokens"] += _cache_creation
+                            _usage_accum["cache_read_tokens"] += details.get("cache_read") or 0
 
                             # ── Model detection (priority order) ─────────────
                             # 1. ls_model_name — LangChain standard set by all ChatModel
@@ -290,8 +298,8 @@ async def execute_run(
                                 })
                                 entry["input_tokens"] += in_toks or total_toks
                                 entry["output_tokens"] += out_toks
-                                entry["cache_creation_tokens"] += details.get("cache_creation", 0)
-                                entry["cache_read_tokens"] += details.get("cache_read", 0)
+                                entry["cache_creation_tokens"] += _cache_creation
+                                entry["cache_read_tokens"] += details.get("cache_read") or 0
                                 entry["request_count"] += 1
 
                             # ── Stop reason (A1) ─────────────────────────────
