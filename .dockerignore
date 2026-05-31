@@ -1,0 +1,14 @@
+.git
+.gitignore
+.pytest_cache
+.venv
+.codex
+.claude
+.mypy_cache
+.ruff_cache
+.tox
+.coverage
+coverage.xml
+dist
+__pycache__
+**/__pycache__

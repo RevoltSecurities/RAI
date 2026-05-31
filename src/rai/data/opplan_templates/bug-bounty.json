@@ -1,0 +1,79 @@
+[
+  {
+    "title": "Target reconnaissance and asset discovery",
+    "phase": "recon",
+    "description": "Enumerate all in-scope assets: subdomains, IPs, APIs, mobile apps, and cloud infrastructure.",
+    "acceptance_criteria": [
+      "All subdomains in scope enumerated",
+      "IPs and ASNs mapped to target organization",
+      "APIs and mobile app endpoints identified",
+      "Program scope boundaries confirmed",
+      "High-value targets prioritized by bounty table"
+    ],
+    "framework_refs": ["T1595", "T1590"],
+    "tool_hints": ["amass", "subfinder", "httpx", "shodan", "web_search"],
+    "risk_level": "low",
+    "priority": 1
+  },
+  {
+    "title": "Web application vulnerability testing",
+    "phase": "testing",
+    "description": "Test in-scope web applications for high-severity bugs: XSS, SQLi, SSRF, auth bypass, business logic.",
+    "acceptance_criteria": [
+      "Authentication and authorization tested",
+      "All user-input parameters tested for injection",
+      "SSRF opportunities tested on URL parameters",
+      "Business logic flows tested for abuse",
+      "IDOR tested on resource identifiers"
+    ],
+    "framework_refs": ["OWASP A01:2021", "OWASP A03:2021", "CWE-918"],
+    "tool_hints": ["burpsuite", "ffuf", "sqlmap", "nuclei"],
+    "risk_level": "high",
+    "priority": 2
+  },
+  {
+    "title": "API security testing",
+    "phase": "testing",
+    "description": "Test API endpoints for BOLA, BFLA, improper authentication, and sensitive data exposure.",
+    "acceptance_criteria": [
+      "BOLA tested on all object ID endpoints",
+      "BFLA tested by accessing privileged functions with low-privilege tokens",
+      "JWT/OAuth vulnerabilities tested",
+      "Excessive data exposure tested in API responses"
+    ],
+    "framework_refs": ["OWASP API1:2023", "OWASP API2:2023", "OWASP API5:2023"],
+    "tool_hints": ["burpsuite", "postman", "jwt_tool", "kiterunner"],
+    "risk_level": "critical",
+    "priority": 3
+  },
+  {
+    "title": "Develop proof of concept for confirmed findings",
+    "phase": "exploitation",
+    "description": "For each valid finding, create a minimal, reliable PoC that demonstrates impact without causing damage.",
+    "acceptance_criteria": [
+      "PoC developed for each confirmed finding",
+      "PoC demonstrates impact clearly without being destructive",
+      "Reproduction steps documented in detail",
+      "CVSS score calculated and justified"
+    ],
+    "framework_refs": [],
+    "tool_hints": ["burpsuite repeater", "curl", "python", "custom scripts"],
+    "risk_level": "high",
+    "priority": 4
+  },
+  {
+    "title": "Write HackerOne and Bugcrowd reports",
+    "phase": "reporting",
+    "description": "Write platform-compliant bug bounty reports for each confirmed finding, ready for submission.",
+    "acceptance_criteria": [
+      "HackerOne markdown report generated per finding",
+      "Bugcrowd CSV generated for bulk submission",
+      "All findings include: title, severity, CVSS, steps to reproduce, impact, PoC, remediation",
+      "Reports reviewed for clarity and completeness"
+    ],
+    "framework_refs": [],
+    "tool_hints": ["findings_export format=hackerone", "findings_export format=bugcrowd"],
+    "risk_level": "low",
+    "priority": 5
+  }
+]

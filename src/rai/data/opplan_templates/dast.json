@@ -1,0 +1,119 @@
+[
+  {
+    "title": "Configure DAST scanner and authenticate",
+    "phase": "setup",
+    "description": "Set up the DAST scanner, configure authentication credentials, and verify scanner can reach all target endpoints.",
+    "acceptance_criteria": [
+      "Scanner reaches target application successfully",
+      "Authenticated scanning configured with valid credentials",
+      "Scope boundaries configured to avoid out-of-scope systems",
+      "Baseline scan confirms connectivity"
+    ],
+    "framework_refs": [],
+    "tool_hints": ["zap", "burpsuite", "nikto", "nuclei"],
+    "risk_level": "low",
+    "priority": 1
+  },
+  {
+    "title": "Spider and crawl application for endpoint discovery",
+    "phase": "scanning",
+    "description": "Discover all application pages, endpoints, forms, and JavaScript-rendered content.",
+    "acceptance_criteria": [
+      "Complete sitemap or endpoint list generated",
+      "API endpoints and AJAX calls captured",
+      "Authentication-protected pages discovered",
+      "File upload endpoints identified"
+    ],
+    "framework_refs": ["T1595.002"],
+    "tool_hints": ["zap spider", "burpsuite crawler", "ffuf", "gobuster"],
+    "risk_level": "low",
+    "priority": 2
+  },
+  {
+    "title": "Automated vulnerability scan",
+    "phase": "scanning",
+    "description": "Run active scanning rules against all discovered endpoints covering OWASP Top 10 categories.",
+    "acceptance_criteria": [
+      "All discovered endpoints scanned with active rules",
+      "Scan logs retained for reproducibility",
+      "Scan completion verified (no partial runs)"
+    ],
+    "framework_refs": ["OWASP A01:2021", "OWASP A03:2021", "OWASP A05:2021"],
+    "tool_hints": ["zap active scan", "nuclei -t dast/", "nikto"],
+    "risk_level": "medium",
+    "priority": 3
+  },
+  {
+    "title": "Authentication and session management testing",
+    "phase": "testing",
+    "description": "Manually test login, logout, password reset, MFA, and session handling for security weaknesses.",
+    "acceptance_criteria": [
+      "Brute force protection verified",
+      "Session token randomness and expiry tested",
+      "Password reset flow tested for token predictability",
+      "MFA bypass scenarios evaluated"
+    ],
+    "framework_refs": ["OWASP A07:2021", "CWE-287", "CWE-307", "CWE-613"],
+    "tool_hints": ["burpsuite", "zap", "curl", "hydra"],
+    "risk_level": "high",
+    "priority": 4
+  },
+  {
+    "title": "Injection and input validation testing",
+    "phase": "testing",
+    "description": "Test all user-controlled inputs for SQLi, XSS, SSTI, command injection, and XXE.",
+    "acceptance_criteria": [
+      "All input parameters fuzzed for injection",
+      "Reflected and stored XSS scenarios tested",
+      "SQLi tested on all database-interacting endpoints",
+      "File upload tested for unrestricted upload"
+    ],
+    "framework_refs": ["OWASP A03:2021", "CWE-79", "CWE-89", "CWE-94"],
+    "tool_hints": ["sqlmap", "xsstrike", "burpsuite intruder", "ffuf"],
+    "risk_level": "critical",
+    "priority": 5
+  },
+  {
+    "title": "Business logic and access control testing",
+    "phase": "testing",
+    "description": "Test for IDOR, BOLA, price manipulation, workflow bypass, and horizontal/vertical privilege escalation.",
+    "acceptance_criteria": [
+      "IDOR tested on all resource identifiers",
+      "Horizontal privilege escalation tested between users",
+      "Vertical privilege escalation tested between roles",
+      "Business workflow bypass scenarios tested"
+    ],
+    "framework_refs": ["OWASP A01:2021", "CWE-639", "CWE-284"],
+    "tool_hints": ["burpsuite", "autorize extension", "manual testing"],
+    "risk_level": "high",
+    "priority": 6
+  },
+  {
+    "title": "Validate and confirm DAST findings",
+    "phase": "validation",
+    "description": "Manually confirm all scanner-reported findings are genuine vulnerabilities, not false positives.",
+    "acceptance_criteria": [
+      "Every finding manually reproduced",
+      "False positives removed from findings store",
+      "CVSS scores assigned and justified"
+    ],
+    "framework_refs": [],
+    "tool_hints": ["burpsuite repeater", "curl", "manual testing"],
+    "risk_level": "medium",
+    "priority": 7
+  },
+  {
+    "title": "Generate DAST report",
+    "phase": "reporting",
+    "description": "Export confirmed DAST findings as a report suitable for development team remediation.",
+    "acceptance_criteria": [
+      "All confirmed findings documented with reproduction steps",
+      "Remediation guidance provided per finding",
+      "Report exported in requested format"
+    ],
+    "framework_refs": [],
+    "tool_hints": ["findings_export"],
+    "risk_level": "low",
+    "priority": 8
+  }
+]

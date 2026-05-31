@@ -1,0 +1,45 @@
+[
+  {
+    "title": "Define engagement scope and objectives",
+    "phase": "planning",
+    "description": "Define the target, scope, methodology, and success criteria for this custom engagement.",
+    "acceptance_criteria": [
+      "Target and scope clearly documented",
+      "Methodology and framework selected",
+      "Success criteria agreed with stakeholders",
+      "Timeline and milestones defined"
+    ],
+    "framework_refs": [],
+    "tool_hints": ["memory_write"],
+    "risk_level": "low",
+    "priority": 1
+  },
+  {
+    "title": "Execute engagement objectives",
+    "phase": "execution",
+    "description": "Carry out the engagement according to the defined plan. Use opplan_expand to break this into specific sub-tasks.",
+    "acceptance_criteria": [
+      "All defined objectives completed or documented as blocked",
+      "Findings recorded for each discovered issue",
+      "Evidence collected for all findings"
+    ],
+    "framework_refs": [],
+    "tool_hints": [],
+    "risk_level": "medium",
+    "priority": 2
+  },
+  {
+    "title": "Generate engagement report",
+    "phase": "reporting",
+    "description": "Export findings and engagement summary in requested format.",
+    "acceptance_criteria": [
+      "All findings exported in required format",
+      "Executive summary written",
+      "Remediation recommendations provided"
+    ],
+    "framework_refs": [],
+    "tool_hints": ["findings_export", "memory_write"],
+    "risk_level": "low",
+    "priority": 3
+  }
+]
