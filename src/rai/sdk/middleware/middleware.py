@@ -14,6 +14,9 @@ from rai.middleware.model_override import ModelOverrideMiddleware
 from rai.middleware.opplan import OPPLANMiddleware
 from rai.middleware.ratelimit import RateLimitMiddleware
 from rai.middleware.sanitizer import EmptyContentSanitizerMiddleware
+from rai.middleware.compression import MessageCompressionMiddleware
+from rai.middleware.tool_compaction import ToolResultCompressionMiddleware
+from rai.middleware.loop_detection import LoopDetectionMiddleware
 
 try:
     from rai.middleware.prompt_cache import RAIPromptCachingMiddleware
@@ -41,4 +44,7 @@ __all__ = [
     "SkillsMiddleware",
     "LocalAsyncAgentMiddleware",
     "RTKToolMiddleware",
+    "MessageCompressionMiddleware",
+    "ToolResultCompressionMiddleware",
+    "LoopDetectionMiddleware",
 ]

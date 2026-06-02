@@ -10,3 +10,7 @@ __pycache__/
 .tox/
 .coverage
 coverage.xml
+# JS/Node
+node_modules/
+dist/
+*.tsbuildinfo

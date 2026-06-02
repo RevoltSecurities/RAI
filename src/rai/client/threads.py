@@ -54,6 +54,30 @@ class ThreadsAPI:
             params={"limit": limit, "offset": offset},
         )
 
+    async def history_tail(self, thread_id: str, *, limit: int = 50) -> dict:
+        """Return the LAST `limit` messages — two-step fetch (probe total then tail).
+
+        The /history endpoint returns msgs[offset:offset+limit] — without an offset
+        it always returns the OLDEST messages. For resuming a thread in the TUI or
+        web UI, you want the most recent messages, not the first ones.
+        """
+        probe = await self._t.get(
+            f"/threads/{thread_id}/history",
+            params={"limit": 1, "offset": 0},
+        )
+        total: int = probe.get("total", 0)
+        if total <= limit:
+            # Short thread — one fetch covers everything
+            return await self._t.get(
+                f"/threads/{thread_id}/history",
+                params={"limit": limit, "offset": 0},
+            )
+        offset = total - limit
+        return await self._t.get(
+            f"/threads/{thread_id}/history",
+            params={"limit": limit, "offset": offset},
+        )
+
     async def delete(self, thread_id: str) -> dict:
         return await self._t.delete(f"/threads/{thread_id}")
 

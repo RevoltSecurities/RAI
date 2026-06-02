@@ -14,6 +14,8 @@ except ImportError:
     RAIPromptCachingMiddleware = None  # type: ignore[assignment,misc]
 from rai.middleware.model_logger import ModelCallLoggerMiddleware
 from rai.middleware.rtk import RTKToolMiddleware
+from rai.middleware.tool_compaction import ToolResultCompressionMiddleware
+from rai.middleware.loop_detection import LoopDetectionMiddleware
 
 __all__ = [
     "EmptyContentSanitizerMiddleware",
@@ -27,4 +29,6 @@ __all__ = [
     "RAIPromptCachingMiddleware",
     "ModelCallLoggerMiddleware",
     "RTKToolMiddleware",
+    "ToolResultCompressionMiddleware",
+    "LoopDetectionMiddleware",
 ]

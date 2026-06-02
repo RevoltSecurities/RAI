@@ -288,7 +288,7 @@ class RaiHttpTUIApp(App):
         except Exception:
             pass
         try:
-            history = await self._client.threads.history(thread_id, limit=500)
+            history = await self._client.threads.history_tail(thread_id, limit=500)
             messages = history.get("messages", [])
             total = history.get("total", len(messages))
             container = self.query_one("#messages", Container)
@@ -308,8 +308,14 @@ class RaiHttpTUIApp(App):
 
                 if msg_type == "human":
                     c = str(content)
-                    # Skip: background-agent watcher injections and /compact invocations
-                    if not c or c.startswith("[Background agent") or c.strip() == "/compact":
+                    # Skip: injected control messages — never show to user
+                    if (
+                        not c
+                        or c.startswith("[Background agent")
+                        or c.strip() == "/compact"
+                        or c.strip().startswith("<system-reminder>")
+                        or "<system-reminder>" in c
+                    ):
                         continue
                     await container.mount(UserMsg(c))
 

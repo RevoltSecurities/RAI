@@ -15,6 +15,9 @@ from rai.sdk.middleware.middleware import (  # noqa: F401
     SkillsMiddleware,
     LocalAsyncAgentMiddleware,
     RTKToolMiddleware,
+    MessageCompressionMiddleware,
+    ToolResultCompressionMiddleware,
+    LoopDetectionMiddleware,
 )
 
 __all__ = [
@@ -32,4 +35,7 @@ __all__ = [
     "SkillsMiddleware",
     "LocalAsyncAgentMiddleware",
     "RTKToolMiddleware",
+    "MessageCompressionMiddleware",
+    "ToolResultCompressionMiddleware",
+    "LoopDetectionMiddleware",
 ]

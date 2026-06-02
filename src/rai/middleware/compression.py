@@ -18,16 +18,36 @@ logger = logging.getLogger(__name__)
 
 
 def _char_estimate(msg: Any) -> int:
-    """Estimate character count for a single message (used as token_counter)."""
+    """Estimate character count for a single message including tool call args.
+
+    Counts content field + tool_calls[].args JSON so the budget reflects
+    the true token cost. Previously only counted content, causing the fast-path
+    check to under-count AI messages with large bash command args, allowing
+    the total to exceed the 75k char budget.
+    """
+    import json as _json
+
+    total = 0
+
+    # Content field (plain text or list of blocks)
     c = getattr(msg, "content", "")
     if isinstance(c, str):
-        return len(c)
-    if isinstance(c, list):
-        return sum(
+        total += len(c)
+    elif isinstance(c, list):
+        total += sum(
             len(b.get("text", "")) if isinstance(b, dict) else 0
             for b in c
         )
-    return 0
+
+    # Tool call args — AI messages with large bash commands or http_request bodies
+    for tc in getattr(msg, "tool_calls", None) or []:
+        args = tc.get("args", {}) if isinstance(tc, dict) else {}
+        try:
+            total += len(_json.dumps(args))
+        except (TypeError, ValueError):
+            total += len(str(args))
+
+    return total
 
 
 class MessageCompressionMiddleware(AgentMiddleware):

@@ -1,66 +1,100 @@
-# RAI v2.0.0 Release Notes
+# RAI v2.0.1 Release Notes
 
-RAI v2 is a full rewrite and release refresh of the open-source AI security operator. This version focuses on making the main workflow faster to start, easier to package, and broader in capability across autonomous security work.
+## What's New
 
-## Highlights
+### Token Cost Reduction (60–80% on long sessions)
 
-- `rai chat` is now part of the default install and starts the HTTP-backed TUI experience out of the box.
-- The HTTP server stack is included in the base package, so the main interactive flow works without extra dependencies.
-- The Docker image is now supported for local testing and GHCR publishing.
-- The project now ships with a single release commit history for the v2 baseline.
-- Versioning is aligned across the package, CLI, and runtime as `2.0.0`.
+RAI now runs a 3-layer compression pipeline before every model call, keeping costs flat as sessions grow longer:
 
-## Top Features in v2
+1. **History trim** — clips conversation to a token budget before the model sees it
+2. **Tool result compression** — old bash/grep/file outputs are truncated; recent results stay verbatim
+3. **Summarization** — only fires when the first two layers aren't enough
 
-### Interactive Security Operator
+Combined with a configurable cheap model for summarization, a typical VAPT or SAST session now costs significantly less than before.
 
-RAI is built to operate as a terminal-native security assistant, not a generic chat client. It can run autonomous tasks, manage approvals, and coordinate work through the CLI and TUI.
+**Configure a cheaper summarization model:**
+```bash
+rai agents config-set --compact-model "litellm:openai/bedrock-claude-haiku-4.5-(US)"
 
-### Plan Mode
+# With explicit credentials if different from main
+rai agents config-set \
+  --compact-model "litellm:openai/bedrock-claude-haiku-4.5-(US)" \
+  --compact-api-key "sk-..." \
+  --compact-base-url "https://llmproxy.example.com"
 
-Complex work can be broken into structured steps, reviewed before execution, and tracked live during the run. This is the main control point for high-trust autonomous workflows.
+# Clear it (inherit main model)
+rai agents config-set --compact-model ""
+```
 
-### Persistent Memory
+Also configurable via `RAI_COMPACT_MODEL` env var.
 
-RAI stores user, agent, and target memory across sessions so it can preserve methodology, findings, preferences, and target context over time.
+---
 
-### Multi-Agent Execution
+### Loop Detection
 
-RAI can dispatch specialized subagents for recon, research, code analysis, cloud work, reversing, Android analysis, and other focused tasks.
+The agent no longer gets stuck re-executing the same command. When identical tool calls are detected, RAI returns the cached result with a warning instead of executing again:
 
-### HTTP Streaming API
+```
+⚠ DUPLICATE CALL BLOCKED: 'bash' was already executed 5 times and returned:
+0 matches for shell_exec|proc_open|...
+This result is final. Accept it and proceed to the next step.
+```
 
-The FastAPI-backed server exposes runs, threads, tasks, subagents, HITL approval, and SSE event streams for remote control and TUI integration.
+Configurable: `RAI_LOOP_WINDOW=10` (default 10 recent calls tracked).
 
-### Textual TUI
+---
 
-The built-in TUI gives a rich operator interface for approvals, plan review, findings, threads, model selection, and background runs.
+### Plan Mode Improvements
 
-### MCP and Skills
+- Plan completion no longer repeats the full step history in the tool result — agent reads its own notes directly
+- `list_plan_steps` returns compact summaries for completed steps, full detail for pending ones
+- Memory phase at plan exit now explicitly guides the agent to write target-specific methodology to `scope='target'`
 
-RAI integrates with MCP tools and Markdown-based skills so capabilities can be extended without changing the core agent runtime.
+---
 
-### Security Tooling
+### TUI Improvements
 
-The toolkit covers bash execution, findings management, memory, references, web security, cloud, container, Active Directory, Android, and reversing workflows.
+- Thread resume now shows the **most recent messages** instead of the oldest
+- Internal control messages no longer appear as user messages in history
 
-### Docker and GHCR
+---
 
-The project now includes a container build path and a release workflow that publishes Docker images to GitHub Container Registry.
+### Model Call Diagnostics
 
-## Packaging Notes
+Enable detailed per-call logging to verify token consumption:
 
-- Base install: `pip install revolt-rai`
-- No extra is required for `rai chat`
-- Optional provider extras remain available for alternate model backends
+```bash
+RAI_DEBUG_LOG_CALLS=1 rai chat
+# Logs to ~/.rai/debug/model-calls.jsonl
+```
 
-## What Changed at a Glance
+Each entry shows: message count, total chars, estimated tokens, truncated count, message type breakdown.
 
-- Unified release version: `2.0.0`
-- Default interactive path now works without optional HTTP extras
-- Docker build and publish workflow added
-- Source tree and release metadata aligned for the v2 baseline
+---
 
-## Compatibility
+## Bug Fixes
 
-This release is intended as the new v2 baseline. If you are upgrading from an older branch, review agent configs, custom prompts, and any local workflows that assumed the older packaging layout.
+- `pip install revolt-rai` now works — previous wheel was empty due to packaging misconfiguration
+- Session approval (`approve_for_session`) now persists correctly across tool calls
+- Server shuts down cleanly when TUI exits or crashes
+- Thread resume loads with the correct agent graph when multiple agents are registered
+- Audit log no longer blocks the event loop on busy servers
+- `content_file` in `memory_write` now restricted to safe paths only
+
+---
+
+## Upgrade from v2.0.0
+
+No breaking changes. All existing agent configs, memories, and sessions work as-is.
+
+To enable cheaper summarization after upgrading:
+```bash
+rai agents config-set --compact-model "litellm:openai/bedrock-claude-haiku-4.5-(US)"
+```
+
+## Install
+
+```bash
+pip install revolt-rai          # Python CLI + TUI + HTTP server
+pip install revolt-rai[bedrock] # + AWS Bedrock provider
+```
