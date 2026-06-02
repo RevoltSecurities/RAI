@@ -601,6 +601,23 @@ async def list_plan_steps() -> str:
     by_status: dict[str, int] = {}
     for s in steps:
         by_status[s["status"]] = by_status.get(s["status"], 0) + 1
+    # Compact done/blocked steps — strip description/how_to/full-notes to save tokens.
+    # Pending and in_progress steps are returned in full so the agent has complete detail.
+    # notes are summarised to 150 chars for done steps (full notes in mark_step_done ToolMessages).
+    def _compact_step(s: dict) -> dict:
+        status = s.get("status", "")
+        if status in ("done", "blocked"):
+            notes = s.get("notes", "") or ""
+            reason = s.get("reason", "") or ""
+            return {
+                "number": s["number"],
+                "title":  s.get("title") or s.get("description", ""),
+                "status": status,
+                "notes":  (notes[:150] + "…") if len(notes) > 150 else notes,
+                "reason": (reason[:150] + "…") if len(reason) > 150 else reason,
+            }
+        return s  # pending/in_progress: full detail
+
     return json.dumps({
         "plan_title":  plan_data.get("title", "Plan"),
         "total":       len(steps),
@@ -608,7 +625,7 @@ async def list_plan_steps() -> str:
         "blocked":     by_status.get("blocked", 0),
         "in_progress": by_status.get("in_progress", 0),
         "pending":     by_status.get("pending", 0),
-        "steps":       steps,
+        "steps":       [_compact_step(s) for s in steps],
     }, indent=2)
 
 
@@ -865,36 +882,27 @@ async def exit_plan_mode() -> str:
     done_steps    = [s for s in steps if s["status"] == "done"]
     blocked_steps = [s for s in steps if s["status"] == "blocked"]
 
-    notes_lines: list[str] = []
-    for s in steps:
-        note   = s.get("notes", "")
-        reason = s.get("reason", "")
-        suffix = f" — {note}" if note else (f" — blocked: {reason}" if reason else "")
-        label  = s.get("title") or s.get("description", "—")
-        notes_lines.append(f"  {s['number']}. [{s['status']}] {label}{suffix}")
-    step_digest = "\n".join(notes_lines) if notes_lines else "  (no steps recorded)"
-
+    # Compact result — step digest removed (agent reads mark_step_done ToolMessages directly).
+    target_name = plan_data.get("target") or reg.get("metadata", {}).get("target", "")
+    target_line = (
+        f"\n  memory_write(scope='target', file='methodology') — NEW techniques specific to this target\n"
+        f"  memory_write(scope='target', file='notes')       — target-{target_name}: key facts, quirks, credentials\n"
+        if target_name else
+        "\n  memory_write(scope='target', file='methodology') — if a target is active, write target-specific techniques\n"
+    )
     return (
         f"All plan steps complete "
         f"({len(done_steps)} done, {len(blocked_steps)} blocked) — "
         f"'{plan_data.get('title', 'Plan')}'\n\n"
         "── SELF-LEARNING MEMORY PHASE ──────────────────────────────────────────\n"
-        "Before writing your final summary, reflect on what you learned and write\n"
-        "memory entries using memory_write (scope='agent') for anything worth\n"
-        "preserving for future runs. Use the step digest below as your source.\n\n"
-        f"Step execution digest:\n{step_digest}\n\n"
-        "Write entries for each category that applies:\n\n"
-        "  🎯 TARGET / PROJECT FACTS\n"
-        "     New non-obvious knowledge: tech stack, endpoints, credential patterns,\n"
-        "     API quirks, exposed services, config specifics, architecture details.\n\n"
-        "  🔬 METHODOLOGY\n"
-        "     What research or execution approaches worked well (or poorly).\n"
-        "     Techniques, tool combinations, ordering that was effective.\n\n"
-        "  🚧 BLOCKERS & WORKAROUNDS\n"
-        "     What was blocked, why, and how resolved (or not).\n\n"
-        "  💡 LESSONS LEARNED\n"
-        "     Edge cases hit, wrong assumptions corrected, things to do differently.\n\n"
-        "Skip categories where you have nothing new to record.\n"
+        "Read your mark_step_done notes above. Write ONLY entries that are NEW —\n"
+        "skip anything already in memory. Use these tools:\n\n"
+        "  memory_write(scope='agent', file='methodology')  — NEW techniques you used that\n"
+        "    aren't in methodology.md yet (tool combos, attack patterns, ordering that worked)\n"
+        f"{target_line}"
+        "  memory_write(scope='agent', file='feedback')     — wrong assumptions, lessons learned\n"
+        "  memory_write(scope='agent', file='user')         — anything new about user preferences\n\n"
+        "Before writing: call memory_read first to check what already exists — avoid duplicates.\n"
         "────────────────────────────────────────────────────────────────────────\n\n"
         "After writing memories, provide your final summary: what was accomplished,\n"
         "key findings, anything blocked and why, and recommended next steps."

@@ -47,6 +47,13 @@ class AgentConfig:
     temperature: float = 0.7
     max_tokens: int = 8192
     rate_limit_profile: str = ""
+    # Summarization (compaction) model config.
+    # Empty = inherit from parent agent (model/api_key/base_url above).
+    # Set these to use a cheaper model (e.g. haiku) for context compaction
+    # without changing the main agent model.
+    compact_model: str = ""
+    compact_api_key: str = ""
+    compact_base_url: str = ""
 
     def is_empty(self) -> bool:
         """True when no meaningful overrides are set."""
@@ -65,6 +72,12 @@ class AgentConfig:
         lines.append(f"max_tokens = {self.max_tokens}")
         if self.rate_limit_profile:
             lines.append(f'rate_limit_profile = "{self.rate_limit_profile}"')
+        if self.compact_model:
+            lines.append(f'compact_model = "{self.compact_model}"')
+        if self.compact_api_key:
+            lines.append(f'compact_api_key = "{self.compact_api_key}"')
+        if self.compact_base_url:
+            lines.append(f'compact_base_url = "{self.compact_base_url}"')
         return "\n".join(lines) + "\n"
 
 
@@ -81,6 +94,7 @@ def load_agent_config(agent_name: str) -> AgentConfig:
     """
     # 1. config.toml — temperature/max_tokens + fallback model/api_key/base_url
     toml_model = toml_api_key = toml_base_url = ""
+    toml_compact_model = toml_compact_api_key = toml_compact_base_url = ""
     temperature = 0.7
     max_tokens = 8192
     rate_limit_profile = ""
@@ -96,6 +110,9 @@ def load_agent_config(agent_name: str) -> AgentConfig:
             temperature = float(data.get("temperature", 0.7))
             max_tokens = int(data.get("max_tokens", 8192))
             rate_limit_profile = str(data.get("rate_limit_profile", ""))
+            toml_compact_model = str(data.get("compact_model", ""))
+            toml_compact_api_key = str(data.get("compact_api_key", ""))
+            toml_compact_base_url = str(data.get("compact_base_url", ""))
         except Exception as exc:
             logger.warning("Could not read agent config %s: %s", path, exc)
 
@@ -125,6 +142,9 @@ def load_agent_config(agent_name: str) -> AgentConfig:
         temperature=temperature,
         max_tokens=max_tokens,
         rate_limit_profile=rate_limit_profile,
+        compact_model=toml_compact_model,
+        compact_api_key=toml_compact_api_key,
+        compact_base_url=toml_compact_base_url,
     )
 
 

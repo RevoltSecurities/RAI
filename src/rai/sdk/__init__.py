@@ -107,6 +107,9 @@ from rai.sdk.middleware import (
     SkillsMiddleware,
     LocalAsyncAgentMiddleware,
     RTKToolMiddleware,
+    MessageCompressionMiddleware,
+    ToolResultCompressionMiddleware,
+    LoopDetectionMiddleware,
 )
 
 # ---- Tools (top-level getters) ---------------------------------------------
@@ -187,6 +190,9 @@ __all__ = [
     "LocalAsyncAgentMiddleware",
     "RAIPromptCachingMiddleware",
     "RTKToolMiddleware",
+    "MessageCompressionMiddleware",
+    "ToolResultCompressionMiddleware",
+    "LoopDetectionMiddleware",
     # Model SDK
     "build_model",
     "ModelConfig",

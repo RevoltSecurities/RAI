@@ -301,6 +301,9 @@ def _serve_with_tui(
     )
     uv_server = uvicorn.Server(uv_config)
 
+    # Prevent uvicorn from installing its own signal handlers — we manage shutdown.
+    uv_server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
+
     def _run_uvicorn() -> None:
         import asyncio as _asyncio
         loop = _asyncio.new_event_loop()
@@ -335,15 +338,28 @@ def _serve_with_tui(
     if debug_startup:
         typer.echo("Server ready. Opening TUI…")
 
-    launch_tui(
-        base_url=base,
-        agent=agent_names[0],
-        api_key=server_key,
-        thread_id=thread_id or None,
-    )
+    import signal
 
-    # Signal server to stop after TUI exits
-    uv_server.should_exit = True
+    def _shutdown(signum=None, frame=None):  # noqa: ARG001
+        uv_server.should_exit = True
+
+    # Ensure clean shutdown on Ctrl+C / SIGTERM even if TUI crashes
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _shutdown)
+        except (OSError, ValueError):
+            pass  # can't set signal handler in non-main thread — ignore
+
+    try:
+        launch_tui(
+            base_url=base,
+            agent=agent_names[0],
+            api_key=server_key,
+            thread_id=thread_id or None,
+        )
+    finally:
+        # Always stop the server when TUI exits, crashes, or is Ctrl+C'd
+        uv_server.should_exit = True
 
 
 # ── run (client: POST run + stream SSE to terminal) ───────────────────────────

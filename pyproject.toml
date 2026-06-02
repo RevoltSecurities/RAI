@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "revolt-rai"
-version = "2.0.0"
+version = "2.0.1"
 authors = [
     { name = "D. Sanjai Kumar" },
 ]
@@ -72,10 +72,16 @@ Repository = "https://github.com/RevoltSecurities/RAI"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rai"]
-include = ["static/**"]
+include = ["src/rai/**", "static/**"]
 
 [tool.hatch.build.targets.sdist]
-include = ["static/**"]
+include = [
+    "src/rai/**",
+    "static/**",
+    "pyproject.toml",
+    "README.md",
+    "LICENSE",
+]
 
 [tool.ruff]
 line-length = 120

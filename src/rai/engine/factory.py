@@ -71,7 +71,7 @@ logger = logging.getLogger(__name__)
 # bloats the LangGraph checkpoint and accumulated message history.
 try:
     import deepagents.backends.utils as _dbu
-    _dbu.TOOL_RESULT_TOKEN_LIMIT = 8000
+    _dbu.TOOL_RESULT_TOKEN_LIMIT = 4000
 except Exception:
     pass
 
@@ -592,6 +592,26 @@ def create_rai_agent(
     if base_url:
         cfg.base_url = base_url
 
+    # Bridge RAI config credentials into os.environ so ConfigurableModelMiddleware
+    # (deepagents-cli) can find them. That middleware calls deepagents-cli's
+    # create_model() on every runtime model-context swap, which reads ONLY os.environ —
+    # it has no access to RAI's config.toml. Without this, any runtime model switch
+    # (e.g. /model command, TUI model picker, HTTP context injection) rebuilds the
+    # LLM using the wrong or missing credentials, hitting an expired/wrong key.
+    # Force-assign: config.toml api_key always wins unless an explicit non-empty
+    # env var was set BEFORE the process started (CLI env overrides).
+    # setdefault would silently skip empty-string env vars that block the real key.
+    if cfg.api_key:
+        if not os.environ.get("LITELLM_API_KEY"):
+            os.environ["LITELLM_API_KEY"] = cfg.api_key
+        if not os.environ.get("OPENAI_API_KEY"):
+            os.environ["OPENAI_API_KEY"] = cfg.api_key
+    if cfg.base_url:
+        if not os.environ.get("LITELLM_BASE_URL"):
+            os.environ["LITELLM_BASE_URL"] = cfg.base_url
+        if not os.environ.get("OPENAI_BASE_URL"):
+            os.environ["OPENAI_BASE_URL"] = cfg.base_url
+
     # Per-agent config model overrides CLI model only when CLI still has the bare default
     # and config has an explicit model set.  CLI --model always wins over config.
     effective_model: str | BaseChatModel
@@ -673,6 +693,15 @@ def create_rai_agent(
     #     No-ops silently when rtk is not installed or the command has no equivalent.
     if not disable_rtk:
         agent_middleware.append(RTKToolMiddleware())
+
+    # 3.5. Loop detection — prevents degenerate re-execution of identical tool calls.
+    #      When the agent re-derives the same bash/grep/read_file call under context
+    #      pressure, returns the cached result immediately with a ⚠ warning instead
+    #      of executing again. Stops 50× same-command loops like the grep degenerate.
+    from rai.middleware.loop_detection import LoopDetectionMiddleware
+    agent_middleware.append(LoopDetectionMiddleware(
+        window=int(os.environ.get("RAI_LOOP_WINDOW", 10)),
+    ))
 
     # 4. Execute interceptor — routes deepagents' built-in execute tool through
     #    RAI BashTool (env isolation, stderr labelling, /tmp spill, allowlist).
@@ -791,9 +820,26 @@ def create_rai_agent(
     from rai.middleware.model_override import ModelOverrideMiddleware  # lazy
     agent_middleware.append(ModelOverrideMiddleware())
 
-    # 10.5. Message compression — trim history to ~30k tokens before summarization fires.
-    #        Zero LLM cost. Pre-filter so SummarizationMiddleware fires less frequently.
+
+    # 10.5. Message compression — trim history to ~30k tokens before model call.
+    #        Zero LLM cost. Pre-filter: reduces token cost on every call and gives
+    #        SummarizationMiddleware (layer 11) a smaller window to work with.
+    #        Order is correct: compress first → then summarize if still too large.
+    #        The compression.py _char_estimate() fix (includes tool_call args) ensures
+    #        this now accurately measures the 75k char budget.
     agent_middleware.append(MessageCompressionMiddleware())
+
+    # 10.7. Tool result compaction — truncate old bash/file/http results and bash
+    #        command args. Zero LLM cost. Never touches: human messages (carry
+    #        <system-reminder> plan enforcement + subagent notifications), plan tools,
+    #        findings, memory, ask_user. Saves 60-80% context on long security sessions.
+    from rai.middleware.tool_compaction import ToolResultCompressionMiddleware
+    agent_middleware.append(ToolResultCompressionMiddleware(
+        keep_recent=int(os.environ.get("RAI_COMPACT_RESULT_KEEP", 20)),
+        max_result_chars=int(os.environ.get("RAI_COMPACT_RESULT_MAX", 1500)),
+        max_cmd_chars=int(os.environ.get("RAI_COMPACT_CMD_MAX", 600)),
+        max_findings_arg_chars=int(os.environ.get("RAI_COMPACT_FINDINGS_ARG_MAX", 250)),
+    ))
 
     # 11. Summarization tool + early-fire safety valve.
     #
@@ -831,8 +877,38 @@ def create_rai_agent(
         _keep             = int(os.environ.get("RAI_COMPACT_KEEP",          20))
         _truncate_at      = int(os.environ.get("RAI_COMPACT_TRUNCATE_AT",   30))
         _truncate_max     = int(os.environ.get("RAI_COMPACT_TRUNCATE_MAX",  2000))
+        # Summarization model: use cfg.compact_model if set, else fall back to
+        # resolved_model (main agent model). Empty = inherit parent model/key/url.
+        # Configure via: rai agents config-set --compact-model "litellm:openai/bedrock-claude-haiku-4.5-(US)"
+        # or env var: RAI_COMPACT_MODEL
+        _summ_model = resolved_model  # default: same as main agent
+        _compact_model_str = (
+            os.environ.get("RAI_COMPACT_MODEL", "")   # env var wins
+            or cfg.compact_model                       # config.toml compact_model
+        )
+        if _compact_model_str:
+            try:
+                _compact_api_key  = cfg.compact_api_key  or cfg.api_key   # inherit if empty
+                _compact_base_url = cfg.compact_base_url or cfg.base_url  # inherit if empty
+                _summ_model = _build_llm(
+                    _compact_model_str,
+                    api_key=_compact_api_key,
+                    base_url=_compact_base_url,
+                    temperature=0.5,
+                    max_tokens=4096,
+                )
+                logger.debug(
+                    "Using compact model for summarization: %s (api_key=%s, base_url=%s)",
+                    _compact_model_str,
+                    bool(_compact_api_key),
+                    bool(_compact_base_url),
+                )
+            except Exception:
+                logger.debug("Failed to build compact model, falling back to main model", exc_info=True)
+                _summ_model = resolved_model
+
         _summ_auto = SummarizationMiddleware(
-            model=resolved_model,
+            model=_summ_model,
             backend=composite_backend,
             trigger=[("tokens", _tok_trigger), ("messages", _msg_trigger)],
             keep=("messages", _keep),

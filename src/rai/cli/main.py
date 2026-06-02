@@ -587,8 +587,19 @@ def agents_config_set(
     base_url: Annotated[Optional[str], typer.Option("--base-url", help="Custom API base URL (OpenAI-compatible endpoint)")] = None,
     temperature: Annotated[Optional[float], typer.Option("--temperature", help="Sampling temperature")] = None,
     max_tokens: Annotated[Optional[int], typer.Option("--max-tokens", help="Max output tokens")] = None,
+    compact_model: Annotated[Optional[str], typer.Option("--compact-model", help="Cheaper model for context summarization (empty = inherit main model). E.g. 'litellm:openai/bedrock-claude-haiku-4.5-(US)'")] = None,
+    compact_api_key: Annotated[Optional[str], typer.Option("--compact-api-key", help="API key for summarization model (empty = inherit main api-key)")] = None,
+    compact_base_url: Annotated[Optional[str], typer.Option("--compact-base-url", help="Base URL for summarization model (empty = inherit main base-url)")] = None,
 ) -> None:
-    """Set per-agent config values."""
+    """Set per-agent config values.
+
+    \b
+    Examples
+    --------
+        rai agents config-set --model "litellm:openai/bedrock-claude-sonnet-4.6-(US)" --api-key sk-...
+        rai agents config-set --compact-model "litellm:openai/bedrock-claude-haiku-4.5-(US)"
+        rai agents config-set --compact-model "" --compact-api-key ""   # clear (inherit from main)
+    """
     from rai.config.agent import load_agent_config, save_agent_config
     cfg = load_agent_config(name)
     if model is not None:
@@ -601,8 +612,18 @@ def agents_config_set(
         cfg.temperature = temperature
     if max_tokens is not None:
         cfg.max_tokens = max_tokens
+    if compact_model is not None:
+        cfg.compact_model = compact_model
+    if compact_api_key is not None:
+        cfg.compact_api_key = compact_api_key
+    if compact_base_url is not None:
+        cfg.compact_base_url = compact_base_url
     path = save_agent_config(name, cfg)
     console.print(f"[green]✓[/green] Saved config for agent '{name}' → {path}")
+    if cfg.compact_model:
+        console.print(f"[dim]  compact_model: {cfg.compact_model}[/dim]")
+    else:
+        console.print(f"[dim]  compact_model: (inherits main model)[/dim]")
 
 
 @agents_app.command("config-init")
