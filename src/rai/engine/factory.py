@@ -671,6 +671,16 @@ def create_rai_agent(
     # Order matters: first = outermost wrapper, last = innermost (closest to LLM).
     agent_middleware: list[Any] = []
 
+    # Patch AnthropicPromptCachingMiddleware._cache_control to emit no ttl.
+    # Anthropic defaults to 1h when ttl is absent — Claude Code never sends ttl.
+    # deepagents unconditionally appends its own AnthropicPromptCachingMiddleware
+    # so we patch the class property at factory init time to affect all instances.
+    try:
+        from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware as _APCM
+        _APCM._cache_control = property(lambda self: {"type": self.type})  # type: ignore[method-assign]
+    except Exception:
+        pass
+
     # 0. Configurable model — enables per-request model overrides via LangGraph runtime
     #    context (no-op when no CLIContext is present on the runtime).
     try:
@@ -794,8 +804,9 @@ def create_rai_agent(
     #      volatile turns).  No-ops silently for non-Anthropic/non-Claude models.
     try:
         from rai.middleware.cache_split import StaticSystemPromptCacheBreakpointMiddleware
+        # ttl="1h" — Anthropic's default when omitted; matches Claude Code (no ttl sent).
         agent_middleware.append(
-            StaticSystemPromptCacheBreakpointMiddleware(unsupported_model_behavior="ignore")
+            StaticSystemPromptCacheBreakpointMiddleware(unsupported_model_behavior="ignore", ttl="1h")
         )
     except ImportError:
         logger.debug("cache_split not available; skipping StaticSystemPromptCacheBreakpointMiddleware")
@@ -926,27 +937,37 @@ def create_rai_agent(
         logger.debug("SummarizationToolMiddleware unavailable; skipping manual compact", exc_info=True)
 
     # 11.5. Prompt caching — tags system message, tools, and last-turn content with
-    #        cache_control breakpoints so static prefixes are cached across turns.
-    #        Covers direct ChatAnthropic AND ChatLiteLLM proxying Claude models
-    #        (e.g. litellm:openai/bedrock-claude-sonnet-4.6-(US)).
-    #        No-ops silently for all other model types.
-    try:
-        from rai.middleware.prompt_cache import RAIPromptCachingMiddleware
-        agent_middleware.append(RAIPromptCachingMiddleware(unsupported_model_behavior="ignore"))
-    except ImportError:
-        logger.debug("langchain-anthropic not installed; skipping RAIPromptCachingMiddleware")
+    #        RAIPromptCachingMiddleware disabled — deepagents unconditionally appends
+    #        AnthropicPromptCachingMiddleware at its tail which handles system[-1] and
+    #        tools. Having both caused _should_apply_caching conflicts and prevented
+    #        StaticSystemPromptCacheBreakpointMiddleware from tagging system[0].
 
     # User-supplied extra middleware — runs after all RAI built-ins, before final sanitizer.
     if extra_middleware:
         agent_middleware.extend(extra_middleware)
 
     # 12a. Model-call debug logger — activated by RAI_DEBUG_LOG_CALLS=1.
-    #      Sits just before the sanitizer so it logs the exact reduced message list
-    #      that will reach the model (proving compact/summarization is working).
     import os as _os
     if _os.environ.get("RAI_DEBUG_LOG_CALLS"):
         from rai.middleware.model_logger import ModelCallLoggerMiddleware
         agent_middleware.append(ModelCallLoggerMiddleware())
+
+    # 12b. Request inspector — logs full request + optional MITM proxy (RAI_INSPECT=1).
+    if _os.environ.get("RAI_INSPECT"):
+        from rai.middleware.request_inspector import RequestInspectorMiddleware
+        agent_middleware.append(RequestInspectorMiddleware())
+
+    # 12c. Cache TTL upgrade — strips 'ttl' from all cache_control blocks.
+    #      AnthropicPromptCachingMiddleware defaults ttl="5m"; removing it lets
+    #      Anthropic default to 1h — matching Claude Code (no ttl sent).
+    from rai.middleware.cache_ttl import CacheControlTTLUpgradeMiddleware
+    agent_middleware.append(CacheControlTTLUpgradeMiddleware())
+
+    # 12d. Last human message cache — stamps cache_control: ephemeral on the last
+    #      HumanMessage's last content block so the full conversation history is
+    #      cached on the next turn. Matches Claude Code's per-turn caching strategy.
+    from rai.middleware.message_cache import LastHumanMessageCacheMiddleware
+    agent_middleware.append(LastHumanMessageCacheMiddleware())
 
     # 12. Empty content sanitizer — must be last (innermost) so it runs just before
     #     serialisation; strips empty text blocks that Bedrock rejects.

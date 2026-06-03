@@ -108,6 +108,12 @@ def _resolve_base_url(provider: str, explicit: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _is_claude_model(model_str: str) -> bool:
+    """Return True if model_str refers to a Claude/Anthropic model."""
+    s = model_str.lower()
+    return "claude" in s or "anthropic" in s
+
+
 def _build_llm(
     model: str | BaseChatModel,
     *,
@@ -120,10 +126,15 @@ def _build_llm(
 
     Routing rules (in priority order):
       1. Already a BaseChatModel → return as-is.
-      2. 'litellm:<model>' prefix or '<provider>/<model>' → ChatLiteLLM.
-      3. 'anthropic:<model>' + base_url set → proxy routing via ChatLiteLLM
-         with bedrock alias so the proxy accepts the request (avoids 401).
-      4. Any '<provider>:<model>' → init_chat_model with credentials.
+      2. 'chatanthropic:<model>' prefix → ChatAnthropic directly (proper /v1/messages
+         wire format, cache_control preserved, thinking support).
+      3. 'litellm:<model>' prefix or '<provider>/<model>' where model is Claude
+         → upgrade to ChatAnthropic for prompt caching. Falls back to ChatLiteLLM
+         if langchain-anthropic is not installed.
+      4. 'litellm:<model>' or '<provider>/<model>' (non-Claude) → ChatLiteLLM.
+      5. 'anthropic:<model>' + base_url set → proxy routing via ChatAnthropic
+         (was ChatLiteLLM — upgraded to preserve cache_control).
+      6. Any '<provider>:<model>' → init_chat_model with credentials.
     """
     from langchain_core.language_models import BaseChatModel as _Base
 
@@ -132,11 +143,28 @@ def _build_llm(
 
     model_str: str = model
 
+    # chatanthropic: prefix — force ChatAnthropic directly (proper /v1/messages
+    # wire format, cache_control preserved, extended thinking support).
+    if model_str.startswith("chatanthropic:"):
+        raw = model_str[len("chatanthropic:"):]
+        return _make_chat_anthropic(raw, api_key=api_key, base_url=base_url,
+                                    temperature=temperature, max_tokens=max_tokens)
+
     # LiteLLM prefix strip
     if model_str.startswith("litellm:"):
         model_str = model_str[len("litellm:"):]
 
     if _is_litellm_format(model_str):
+        # Upgrade Claude models to ChatAnthropic for prompt caching.
+        # LiteLLM routes to /chat/completions which strips cache_control — no caching.
+        # ChatAnthropic routes to /v1/messages which preserves cache_control.
+        # Falls back to ChatLiteLLM if langchain-anthropic is unavailable.
+        if _is_claude_model(model_str):
+            try:
+                return _make_chat_anthropic(model_str, api_key=api_key, base_url=base_url,
+                                            temperature=temperature, max_tokens=max_tokens)
+            except ImportError:
+                pass  # langchain-anthropic not installed, fall through to ChatLiteLLM
         return _make_litellm(model_str, api_key=api_key, base_url=base_url,
                              temperature=temperature, max_tokens=max_tokens)
 
@@ -149,14 +177,19 @@ def _build_llm(
     effective_base = _resolve_base_url(provider, base_url)
     effective_key  = _resolve_key(provider, api_key)
 
-    # Route anthropic models through LiteLLM when a proxy base_url is configured,
-    # translating the shortname to the bedrock alias the proxy expects.
+    # Route anthropic models through ChatAnthropic (was ChatLiteLLM).
+    # ChatAnthropic preserves cache_control on /v1/messages; ChatLiteLLM strips it.
     if provider == "anthropic" and effective_base:
-        bedrock_name = _ANTHROPIC_TO_BEDROCK_US.get(model_name, model_name)
-        prefix = os.environ.get("RAI_LITELLM_PROXY_PREFIX", "openai")
-        litellm_model = f"{prefix}/{bedrock_name}"
-        return _make_litellm(litellm_model, api_key=effective_key, base_url=effective_base,
-                             temperature=temperature, max_tokens=max_tokens)
+        try:
+            return _make_chat_anthropic(model_name, api_key=effective_key, base_url=effective_base,
+                                        temperature=temperature, max_tokens=max_tokens)
+        except ImportError:
+            # langchain-anthropic not installed — fall back to LiteLLM proxy routing
+            bedrock_name = _ANTHROPIC_TO_BEDROCK_US.get(model_name, model_name)
+            prefix = os.environ.get("RAI_LITELLM_PROXY_PREFIX", "openai")
+            litellm_model = f"{prefix}/{bedrock_name}"
+            return _make_litellm(litellm_model, api_key=effective_key, base_url=effective_base,
+                                 temperature=temperature, max_tokens=max_tokens)
 
     from langchain.chat_models import init_chat_model
     kw: dict[str, Any] = {}
@@ -165,6 +198,59 @@ def _build_llm(
     if effective_base:
         kw["base_url"] = effective_base
     return init_chat_model(model_str, **kw)
+
+
+def _make_chat_anthropic(
+    model_str: str,
+    *,
+    api_key: str,
+    base_url: str,
+    temperature: float,
+    max_tokens: int,
+) -> "BaseChatModel":
+    """Instantiate ChatAnthropic directly.
+
+    Sends /v1/messages (Anthropic wire format) instead of /chat/completions,
+    which preserves cache_control blocks through LiteLLM proxies. Also enables
+    extended thinking and sets the interleaved-thinking beta header.
+
+    Requires langchain-anthropic — raises ImportError if not installed.
+    """
+    try:
+        from langchain_anthropic import ChatAnthropic
+    except ImportError as exc:
+        raise ImportError(
+            "ChatAnthropic requires 'langchain-anthropic'.\n"
+            "Install it with:  pip install langchain-anthropic"
+        ) from exc
+
+    effective_key  = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    effective_base = base_url or os.environ.get("ANTHROPIC_BASE_URL", "")
+
+    # Extended thinking — enabled by default, disable with RAI_THINKING=0.
+    # Requires temperature=1 (Anthropic enforces this).
+    thinking_enabled = os.environ.get("RAI_THINKING", "1") not in ("0", "false", "no")
+    thinking: dict[str, Any] | None = None
+    if thinking_enabled:
+        thinking = {"type": "enabled", "budget_tokens": max(1024, max_tokens - 1)}
+        temperature = 1.0  # required by Anthropic when thinking is enabled
+
+    kwargs: dict[str, Any] = {
+        "model": model_str,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "streaming": True,
+        "default_headers": {
+            "Anthropic-Beta": "interleaved-thinking-2025-05-14",
+        },
+    }
+    if thinking is not None:
+        kwargs["thinking"] = thinking
+    if effective_key:
+        kwargs["anthropic_api_key"] = effective_key
+    if effective_base:
+        kwargs["anthropic_api_url"] = effective_base
+    return ChatAnthropic(**kwargs)
 
 
 def _make_litellm(

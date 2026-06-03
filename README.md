@@ -325,41 +325,110 @@ uv tool install .
 
 ## First-Time Setup
 
-One command to configure your model and API key:
+### Direct Anthropic API
 
 ```bash
-# Anthropic Claude (recommended)
-rai agents config-set rai --model claude-sonnet-4-5 --api-key sk-ant-...
+rai agents config-set rai \
+  --model "chatanthropic:claude-sonnet-4-6-20250514" \
+  --api-key "sk-ant-..."
+```
 
-# OpenAI
+No `--base-url` needed. RAI routes directly to `api.anthropic.com`.
+
+### LiteLLM Proxy (recommended for teams)
+
+LiteLLM proxies that speak the Anthropic wire format (most do):
+
+```bash
+rai agents config-set rai \
+  --model "chatanthropic:bedrock-claude-sonnet-4.6-(US)" \
+  --api-key "sk-your-litellm-key" \
+  --base-url "https://your-litellm-proxy.example.com"
+```
+
+RAI automatically sends `POST /v1/messages` through your proxy — prompt caching, thinking, and `cache_control` all work correctly. This gives **6–8× cost reduction** on long sessions vs the OpenAI-format route.
+
+**Cheaper summarization model** (optional):
+
+```bash
+rai agents config-set rai \
+  --compact-model "chatanthropic:bedrock-claude-haiku-4.5-(US)" \
+  --compact-api-key "sk-your-litellm-key" \
+  --compact-base-url "https://your-litellm-proxy.example.com"
+```
+
+### AWS Bedrock (direct, no proxy)
+
+```bash
+# Requires AWS credentials in environment or ~/.aws/credentials
+rai agents config-set rai \
+  --model "bedrock/us.anthropic.claude-sonnet-4-5-20251001-v1:0"
+```
+
+### OpenAI
+
+```bash
 rai agents config-set rai --model gpt-4o --api-key sk-...
+```
 
-# Google Gemini
-rai agents config-set rai --model gemini/gemini-2.0-flash --api-key AIza...
+### Google Gemini
 
-# Ollama (local, no key needed)
+```bash
+rai agents config-set rai \
+  --model "gemini/gemini-2.0-flash" \
+  --api-key "AIza..."
+```
+
+### Ollama (local, no key needed)
+
+```bash
 rai agents config-set rai --model ollama/qwen2.5:latest
-
-# AWS Bedrock
-rai agents config-set rai --model bedrock/us.anthropic.claude-sonnet-4-5-20251001-v1:0
 ```
 
-Then launch:
+### Environment variables (no config file)
 
 ```bash
-rai
+ANTHROPIC_API_KEY=sk-ant-... rai chat
 ```
 
-Subagents inherit the main agent's model and key automatically. Override individually only when needed:
+---
+
+### Prompt Caching & Cost Reduction
+
+RAI v2.0.2+ automatically enables prompt caching for all Claude models via `chatanthropic:` routing:
+
+| What gets cached | Tokens saved | Frequency |
+|-----------------|-------------|-----------|
+| System prompt (70k chars) | ~28k tokens | Every turn after first |
+| Tool definitions (90 tools) | ~35k tokens | Every turn after first |
+| Conversation history | Grows per turn | Every turn after second |
+
+Combined savings: **$5–7 for a full 6-step VAPT** (was $40–60 with LiteLLM routing).
+
+**Extended thinking** is enabled by default for all Claude models.
+
+> ⚠ **Temperature note:** When thinking is enabled, RAI automatically sets `temperature=1.0` as required by Anthropic. Your `config.toml` temperature setting is overridden for Claude models while thinking is active. Non-Claude models (OpenAI, Gemini, Ollama) are not affected.
+
+Disable thinking to restore your configured temperature:
 
 ```bash
-rai agents config-set coder --model gpt-4o --api-key sk-...
+# Per-run
+RAI_THINKING=0 rai chat
+
+# Permanent (add to your shell profile)
+export RAI_THINKING=0
 ```
 
-Or skip config entirely and use environment variables:
+| Mode | Temperature | Reasoning |
+|------|------------|-----------|
+| `RAI_THINKING=1` (default) | Forced to `1.0` by Anthropic | Extended thinking active |
+| `RAI_THINKING=0` | Your configured value (default `0.7`) | Standard mode |
+
+**Debug token usage**:
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-... RAI_MODEL=claude-sonnet-4-5 rai
+RAI_DEBUG_LOG_CALLS=1 rai chat
+# Logs to ~/.rai/debug/model-calls.jsonl
 ```
 
 ---

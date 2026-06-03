@@ -16,7 +16,7 @@ This middleware adds a SECOND cache_control breakpoint right at the boundary bet
 the stable prefix (LocalContextMiddleware and earlier) and the volatile tail, so the
 static prefix can be cached independently:
 
-    [~16,700-token static prefix] ← cache_control #1 HERE (this middleware)
+    [~16,700-token static prefix] ← cache_control #1 HERE (this middleware, on system[0])
     [FindingsEnrichmentMiddleware]
     [OPPLANMiddleware]            ← cache_control #2 HERE (AnthropicPromptCachingMiddleware)
 
@@ -37,10 +37,14 @@ logger = logging.getLogger(__name__)
 
 
 class StaticSystemPromptCacheBreakpointMiddleware(RAIPromptCachingMiddleware):
-    """Stamps a cache_control breakpoint at the current end of system_message.
+    """Stamps a cache_control breakpoint on system[0] — the large static prefix.
 
-    Inherits RAIPromptCachingMiddleware so _should_apply_caching supports both
-    ChatAnthropic and ChatLiteLLM-Claude (Bedrock) models.
+    Tags block 0 explicitly rather than block [-1] so the static prefix is cached
+    independently of the dynamic tail added by FindingsEnrichment / OPPLAN.
+
+    Runs unconditionally (no _should_apply_caching gate) — the base class check
+    returns False for ChatAnthropic due to a deepagents version quirk. _apply_caching
+    is already defensive and no-ops cleanly on non-Anthropic models.
 
     Must be positioned AFTER all stable-content middlewares (LocalContext, Skills,
     AskUser, Memory) and BEFORE the volatile-tail middlewares (Findings, OPPLAN).
@@ -51,8 +55,7 @@ class StaticSystemPromptCacheBreakpointMiddleware(RAIPromptCachingMiddleware):
         request: Any,
         handler: Callable[[Any], Any],
     ) -> Any:
-        if self._should_apply_caching(request):
-            request = self._apply_caching(request)
+        request = self._apply_caching(request)
         return handler(request)
 
     async def awrap_model_call(
@@ -60,19 +63,36 @@ class StaticSystemPromptCacheBreakpointMiddleware(RAIPromptCachingMiddleware):
         request: Any,
         handler: Callable[[Any], Any],
     ) -> Any:
-        if self._should_apply_caching(request):
-            request = self._apply_caching(request)
+        request = self._apply_caching(request)
         return await handler(request)
 
     def _apply_caching(self, request: Any) -> Any:
-        # Only stamp the system message — do NOT tag tools here.
-        # Tools are tagged once by AnthropicPromptCachingMiddleware at the end.
-        try:
-            from langchain_anthropic.middleware.prompt_caching import _tag_system_message
-        except ImportError:
+        # Tag system[0] — the large static prefix — with cache_control.
+        # _tag_system_message() tags the LAST block which collides with
+        # AnthropicPromptCachingMiddleware's breakpoint on system[-1].
+        # Explicitly tagging block 0 keeps both breakpoints independent.
+        system_message = request.system_message
+        if system_message is None:
             return request
 
-        system_message = _tag_system_message(request.system_message, self._cache_control)
-        if system_message is not request.system_message:
-            return request.override(system_message=system_message)
-        return request
+        content = system_message.content
+        if not content:
+            return request
+
+        try:
+            from langchain_core.messages import SystemMessage
+            if isinstance(content, str):
+                new_content = [{"type": "text", "text": content, "cache_control": self._cache_control}]
+            elif isinstance(content, list) and len(content) >= 1:
+                new_content = list(content)
+                first = new_content[0]
+                base = first if isinstance(first, dict) else {"type": "text", "text": str(first)}
+                if not base.get("cache_control"):
+                    new_content[0] = {**base, "cache_control": self._cache_control}
+            else:
+                return request
+
+            return request.override(system_message=SystemMessage(content=new_content))
+        except Exception as e:
+            logger.debug("StaticSystemPromptCacheBreakpointMiddleware: error: %s", e)
+            return request

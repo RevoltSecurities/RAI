@@ -1,12 +1,9 @@
 """RequestInspectorMiddleware — debug middleware for inspecting LLM requests live.
 
-FOR TESTING ONLY — revert before production release.
-
 Two modes:
   1. Log mode (default): logs full request details to ~/.rai/debug/requests.jsonl
-     Shows: model, messages, token counts, tool names, cache_control presence
-  2. Proxy mode: routes all LLM requests through a local MITM proxy (e.g. mitmproxy)
-     Set RAI_INSPECT_PROXY=http://127.0.0.1:8080 to capture in mitmproxy/Burp/Charles
+  2. Proxy mode: routes all LLM requests through a local MITM proxy (Burp/mitmproxy)
+     Set RAI_INSPECT_PROXY=http://127.0.0.1:8080
 
 Activation:
   RAI_INSPECT=1                    — enable request logging
@@ -19,9 +16,6 @@ Usage with mitmproxy:
 
   # Terminal 2: start RAI with proxy
   RAI_INSPECT=1 RAI_INSPECT_PROXY=http://127.0.0.1:8080 rai chat
-
-  # mitmproxy will show every request to your LiteLLM proxy / Anthropic API
-  # including full message payloads, headers, response times
 """
 
 from __future__ import annotations
@@ -48,7 +42,6 @@ _LOG_FILE = os.environ.get(
 
 
 def _msg_preview(msg: Any) -> dict:
-    """Compact message representation for logging."""
     mtype = getattr(msg, "type", type(msg).__name__)
     content = getattr(msg, "content", "") or ""
     if isinstance(content, list):
@@ -63,7 +56,7 @@ def _msg_preview(msg: Any) -> dict:
         (b.get("cache_control") if isinstance(b, dict) else False)
         for b in (content if isinstance(getattr(msg, "content", None), list) else [])
     )
-    entry = {
+    entry: dict[str, Any] = {
         "type": mtype,
         "chars": len(str(content)),
         "preview": str(content)[:120],
@@ -75,44 +68,63 @@ def _msg_preview(msg: Any) -> dict:
 
 
 def _inject_proxy(model: Any) -> Any:
-    """Patch the LLM client to route through RAI_INSPECT_PROXY (e.g. Burp/mitmproxy).
+    """Patch the LLM client to route through RAI_INSPECT_PROXY.
 
-    Burp Suite acts as a MITM and presents its own certificate — SSL verification
-    must be disabled or Python will refuse the connection.
+    ChatAnthropic: temporarily clears macOS system SOCKS proxy env vars
+    (WARP/VPN sets socks5 via get_environment_proxies) then patches ._client /
+    ._async_client with httpx clients that use the MITM proxy + verify=False.
+
+    ChatLiteLLM: sets HTTPS_PROXY env var — LiteLLM reads it per call.
     """
     if not _PROXY:
         return model
     try:
         import httpx
+        from langchain_anthropic import ChatAnthropic
 
-        # verify=False: accept Burp/mitmproxy self-signed cert
-        proxy_transport = httpx.HTTPTransport(proxy=_PROXY, verify=False)
-        async_proxy_transport = httpx.AsyncHTTPTransport(proxy=_PROXY, verify=False)
-        proxy_client = httpx.Client(transport=proxy_transport, verify=False)
-        async_proxy_client = httpx.AsyncClient(transport=async_proxy_transport, verify=False)
+        if isinstance(model, ChatAnthropic):
+            from langchain_anthropic._client_utils import (
+                _get_default_httpx_client, _get_default_async_httpx_client,
+            )
+            # Clear system proxy env vars temporarily — macOS WARP/VPN sets socks5
+            # via get_environment_proxies() which httpx picks up, failing without socksio.
+            _PROXY_KEYS = [
+                "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY",
+                "https_proxy", "http_proxy", "all_proxy",
+            ]
+            saved = {k: os.environ.pop(k) for k in _PROXY_KEYS if k in os.environ}
+            _get_default_httpx_client.cache_clear()
+            _get_default_async_httpx_client.cache_clear()
 
-        # ChatAnthropic: patch its internal httpx clients directly
-        _anthropic_client = getattr(model, "client", None)
-        if _anthropic_client is not None:
-            if hasattr(_anthropic_client, "_client"):
-                _anthropic_client._client = proxy_client
-            if hasattr(model, "async_client") and hasattr(model.async_client, "_client"):
-                model.async_client._client = async_proxy_client
+            transport       = httpx.HTTPTransport(proxy=_PROXY, verify=False)
+            async_transport = httpx.AsyncHTTPTransport(proxy=_PROXY, verify=False)
+            sync_client  = httpx.Client(transport=transport, verify=False, trust_env=False)
+            async_client = httpx.AsyncClient(transport=async_transport, verify=False, trust_env=False)
+
+            anth_sync  = model._client
+            anth_async = model._async_client
+            if hasattr(anth_sync, "_client"):
+                anth_sync._client = sync_client
+            if hasattr(anth_async, "_client"):
+                anth_async._client = async_client
+
+            os.environ.update(saved)
             logger.warning("RequestInspectorMiddleware: patched ChatAnthropic → %s", _PROXY)
+            return model
 
-        # ChatLiteLLM: set env vars — LiteLLM reads HTTPS_PROXY + SSL_VERIFY on each call
-        os.environ["HTTPS_PROXY"] = _PROXY
-        os.environ["HTTP_PROXY"] = _PROXY
-        # Disable SSL verification for Burp/mitmproxy MITM certificate
-        os.environ["LITELLM_SSL_VERIFY"] = "false"
-        os.environ["SSL_VERIFY"] = "false"
-        os.environ["CURL_CA_BUNDLE"] = ""        # disables curl SSL verify
-        os.environ["REQUESTS_CA_BUNDLE"] = ""    # disables requests SSL verify
-        logger.warning(
-            "RequestInspectorMiddleware: HTTPS_PROXY=%s SSL_VERIFY=false", _PROXY
-        )
     except Exception as e:
-        logger.warning("RequestInspectorMiddleware: proxy inject failed: %s", e)
+        logger.warning("RequestInspectorMiddleware: ChatAnthropic patch failed: %s", e)
+        if "saved" in dir():
+            os.environ.update(saved)  # type: ignore[possibly-undefined]
+
+    # ChatLiteLLM fallback — env var approach
+    os.environ["HTTPS_PROXY"] = _PROXY
+    os.environ["HTTP_PROXY"] = _PROXY
+    os.environ["LITELLM_SSL_VERIFY"] = "false"
+    os.environ["SSL_VERIFY"] = "false"
+    os.environ["CURL_CA_BUNDLE"] = ""
+    os.environ["REQUESTS_CA_BUNDLE"] = ""
+    logger.warning("RequestInspectorMiddleware: HTTPS_PROXY=%s SSL_VERIFY=false", _PROXY)
     return model
 
 
@@ -128,7 +140,6 @@ def _write(entry: dict) -> None:
 class RequestInspectorMiddleware(AgentMiddleware):
     """Debug middleware — logs full LLM request details + optional MITM proxy routing.
 
-    FOR TESTING ONLY. Remove from middleware stack before production release.
     Activate with: RAI_INSPECT=1 [RAI_INSPECT_PROXY=http://127.0.0.1:8080]
     """
 
@@ -136,13 +147,9 @@ class RequestInspectorMiddleware(AgentMiddleware):
         self._enabled = _ENABLED
         self._proxy_injected = False
         if self._enabled and _PROXY:
-            logger.warning(
-                "RequestInspectorMiddleware: MITM proxy active → %s", _PROXY
-            )
+            logger.warning("RequestInspectorMiddleware: MITM proxy active → %s", _PROXY)
         elif self._enabled:
-            logger.warning(
-                "RequestInspectorMiddleware: request logging active → %s", _LOG_FILE
-            )
+            logger.warning("RequestInspectorMiddleware: request logging active → %s", _LOG_FILE)
 
     def _build_entry(self, request: ModelRequest, elapsed_ms: float) -> dict:
         msgs = request.messages or []
@@ -152,14 +159,11 @@ class RequestInspectorMiddleware(AgentMiddleware):
         except Exception:
             pass
 
-        # Cache control presence
         has_cache = any(
             isinstance(getattr(m, "content", None), list) and
             any(isinstance(b, dict) and b.get("cache_control") for b in m.content)
             for m in msgs
         )
-
-        # Count by type
         by_type: dict[str, int] = {}
         for m in msgs:
             t = getattr(m, "type", "?")
@@ -171,7 +175,6 @@ class RequestInspectorMiddleware(AgentMiddleware):
                 for tc in (getattr(m, "tool_calls", None) or []))
             for m in msgs
         )
-
         return {
             "ts": datetime.now().isoformat(),
             "model": model_name,
@@ -185,16 +188,18 @@ class RequestInspectorMiddleware(AgentMiddleware):
             "messages": [_msg_preview(m) for m in msgs],
         }
 
-    def _ensure_proxy(self, request: ModelRequest) -> None:
-        """Inject proxy into model client once."""
+    def _ensure_proxy(self, request: ModelRequest) -> ModelRequest:
         if _PROXY and not self._proxy_injected:
-            _inject_proxy(request.model)
+            patched = _inject_proxy(request.model)
             self._proxy_injected = True
+            if patched is not request.model:
+                return request.override(model=patched)
+        return request
 
     def wrap_model_call(self, request: ModelRequest, handler: Callable) -> ModelResponse:
         if not self._enabled:
             return handler(request)
-        self._ensure_proxy(request)
+        request = self._ensure_proxy(request)
         t0 = time.monotonic()
         result = handler(request)
         elapsed = (time.monotonic() - t0) * 1000
@@ -208,7 +213,7 @@ class RequestInspectorMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         if not self._enabled:
             return await handler(request)
-        self._ensure_proxy(request)
+        request = self._ensure_proxy(request)
         t0 = time.monotonic()
         result = await handler(request)
         elapsed = (time.monotonic() - t0) * 1000
