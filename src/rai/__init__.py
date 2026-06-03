@@ -1,5 +1,5 @@
 """RAI — the open-source AI security operator for the full cybersecurity spectrum: threat modeling, SAST, pentesting, red team, bug bounty, VAPT, and SOC operations."""
-__version__ = "2.0.1"
+__version__ = "2.0.2"
 
 # langchain_core's surface_langchain_deprecation_warnings() inserts a "default"
 # filter at position 0 when it is first imported, pushing any earlier "ignore"
