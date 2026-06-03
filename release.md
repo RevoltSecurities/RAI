@@ -37,7 +37,19 @@ rai agents config-set rai \
 
 RAI now sends `thinking: {type: enabled, budget_tokens: 31999}` on every call — matching Claude Code's behavior. This improves reasoning quality for complex security assessments, reducing mistakes and re-runs.
 
-Requires `temperature: 1.0` (enforced automatically). Disable with `RAI_THINKING=0`.
+> ⚠ **Temperature override:** Anthropic requires `temperature=1.0` when extended thinking is enabled. RAI enforces this automatically for all Claude models. Your `config.toml` temperature setting is ignored while thinking is active. Non-Claude models (OpenAI, Gemini, Ollama) are unaffected.
+
+To disable thinking and restore your configured temperature:
+
+```bash
+RAI_THINKING=0 rai chat          # per-run
+export RAI_THINKING=0            # permanent
+```
+
+| Mode | Temperature used | Notes |
+|------|-----------------|-------|
+| `RAI_THINKING=1` (default) | `1.0` (forced by Anthropic) | Best reasoning quality |
+| `RAI_THINKING=0` | Your `config.toml` value (default `0.7`) | Standard mode, lower cost |
 
 ---
 

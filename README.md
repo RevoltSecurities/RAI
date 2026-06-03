@@ -405,11 +405,24 @@ RAI v2.0.2+ automatically enables prompt caching for all Claude models via `chat
 
 Combined savings: **$5–7 for a full 6-step VAPT** (was $40–60 with LiteLLM routing).
 
-**Extended thinking** is enabled by default. Disable it:
+**Extended thinking** is enabled by default for all Claude models.
+
+> ⚠ **Temperature note:** When thinking is enabled, RAI automatically sets `temperature=1.0` as required by Anthropic. Your `config.toml` temperature setting is overridden for Claude models while thinking is active. Non-Claude models (OpenAI, Gemini, Ollama) are not affected.
+
+Disable thinking to restore your configured temperature:
 
 ```bash
+# Per-run
 RAI_THINKING=0 rai chat
+
+# Permanent (add to your shell profile)
+export RAI_THINKING=0
 ```
+
+| Mode | Temperature | Reasoning |
+|------|------------|-----------|
+| `RAI_THINKING=1` (default) | Forced to `1.0` by Anthropic | Extended thinking active |
+| `RAI_THINKING=0` | Your configured value (default `0.7`) | Standard mode |
 
 **Debug token usage**:
 
