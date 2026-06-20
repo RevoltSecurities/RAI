@@ -84,6 +84,32 @@ from rai.sdk.client.client import (  # noqa: F401
     SubagentsAPI,
 )
 
+from rai.client.claude import (  # noqa: F401
+    ClaudeServeClient,
+    ClaudeServeConfig,
+    ClaudeSSEStream,
+    ClaudeTransport,
+    parse_claude_event,
+    ClaudeSessionIdEvent,
+    ClaudeTokenEvent,
+    ClaudeThinkingEvent,
+    ClaudeToolStartEvent,
+    ClaudeToolResultEvent,
+    ClaudeSubagentStartEvent,
+    ClaudeSubagentProgressEvent,
+    ClaudeSubagentDoneEvent,
+    ClaudeHITLRequestEvent,
+    ClaudeHITLResponseEvent,
+    ClaudePlanBlockedEvent,
+    ClaudeRateLimitEvent,
+    ClaudeRunEndEvent,
+    ClaudeErrorEvent,
+    ChatAPI,
+    SessionsAPI,
+    HistoryAPI,
+    HealthAPI,
+)
+
 __all__ = [
     "RAIClient", "ClientConfig", "PlanTimeoutError",
     "AsyncTransport", "SSEStream", "SSEEvent", "parse_event",
@@ -111,4 +137,13 @@ __all__ = [
     "CompactResponse", "InjectMessageRequest",
     "SystemAPI", "AgentsAPI", "RunsAPI", "RuntimeAPI",
     "ThreadsAPI", "TasksAPI", "PipelinesAPI", "SubagentsAPI",
+    # ClaudeServe client
+    "ClaudeServeClient", "ClaudeServeConfig",
+    "ClaudeSSEStream", "ClaudeTransport", "parse_claude_event",
+    "ClaudeSessionIdEvent", "ClaudeTokenEvent", "ClaudeThinkingEvent",
+    "ClaudeToolStartEvent", "ClaudeToolResultEvent",
+    "ClaudeSubagentStartEvent", "ClaudeSubagentProgressEvent", "ClaudeSubagentDoneEvent",
+    "ClaudeHITLRequestEvent", "ClaudeHITLResponseEvent",
+    "ClaudePlanBlockedEvent", "ClaudeRateLimitEvent", "ClaudeRunEndEvent", "ClaudeErrorEvent",
+    "ChatAPI", "SessionsAPI", "HistoryAPI", "HealthAPI",
 ]

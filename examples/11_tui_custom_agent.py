@@ -1,15 +1,15 @@
 """11_tui_custom_agent.py — Custom agent launched with HTTP server + TUI window.
 
 Demonstrates: RAIAgentBuilder (modular rai.sdk.builder), RAIHTTPServer / HTTPConfig
-              (rai.sdk.harness), RaiHttpTUI (rai.sdk.tui), background server thread,
-              server readiness poll, custom system prompt and security tools.
+              (rai.sdk.harness), RaiHttpTUI + BrandingConfig (rai.sdk.tui),
+              background server thread, server readiness poll, custom branding.
 
 The script:
   1. Builds a pentest agent with RAIAgentBuilder.
   2. Registers it with RAIHTTPServer on a configurable port.
   3. Starts uvicorn in a background thread.
   4. Polls until the server is ready.
-  5. Opens the Textual TUI window connected to the running server.
+  5. Opens the Textual TUI window with custom branding.
   6. On TUI exit, signals the server to stop.
 
 Usage:
@@ -33,7 +33,7 @@ import uvicorn
 # Modular SDK imports — each sub-package is independently importable
 from rai.sdk.builder import RAIAgentBuilder
 from rai.sdk.harness import HTTPConfig, RAIHTTPServer
-from rai.sdk.tui import RaiHttpTUI
+from rai.sdk.tui import RaiHttpTUI, BrandingConfig
 from rai.sdk.tools import get_security_tools, get_builtin_tools, get_memory_tools
 from rai.sdk.engine import DEFAULT_MODEL
 
@@ -149,19 +149,29 @@ def run(
     print(" ready.")
 
     # 4. Open TUI window — blocks until user closes it.
-    #    Pass `banner=` to replace the default RAI ASCII art with custom Rich markup.
-    #    Use `banner=""` to suppress the banner entirely.
+    #    Use BrandingConfig to white-label the TUI with your own logo, title, and tips.
+    #    Use BrandingConfig(show_banner=False) to suppress the banner entirely.
+    branding = BrandingConfig(
+        icon=(
+            "[bold cyan]╔══════════════════════════════╗[/bold cyan]\n"
+            "[bold cyan]║  🛡  Custom Pentest Agent  🛡  ║[/bold cyan]\n"
+            "[bold cyan]╚══════════════════════════════╝[/bold cyan]"
+        ),
+        title="Pentest Agent",
+        subtitle="Powered by RAI",
+        tips=(
+            "[dim]/new[/dim] new thread  "
+            "[dim]·[/dim]  [dim]/threads[/dim] browse  "
+            "[dim]·[/dim]  [dim]ctrl+b[/dim] bg runs"
+        ),
+        info_rows=[("scope", "authorized targets only")],
+    )
     tui = RaiHttpTUI(
         base_url=base,
         agent=agent_name,
         api_key="",
         thread_id=thread_id or None,
-        banner=(
-            "[bold cyan]╔══════════════════════════════╗[/bold cyan]\n"
-            "[bold cyan]║  🛡  Custom Pentest Agent  🛡  ║[/bold cyan]\n"
-            "[bold cyan]╚══════════════════════════════╝[/bold cyan]\n"
-            "[dim]Scope: authorized targets only · HITL required for exploits[/dim]"
-        ),
+        branding=branding,
     )
     tui.run()
 

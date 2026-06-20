@@ -3,7 +3,7 @@
 /* ---- Base ---- */
 Screen {
     background: $background;
-    layers: base autocomplete;
+    layers: base autocomplete plansteps;
 }
 
 /* ---- Chat area ---- */

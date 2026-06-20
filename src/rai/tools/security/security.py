@@ -399,35 +399,98 @@ _WS_FETCH_TOP_N = int(os.environ.get("RAI_SEARCH_FETCH_TOP_N", "5"))
 _WS_FETCH_TIMEOUT = int(os.environ.get("RAI_FETCH_TIMEOUT", "20"))
 _WS_MAX_CONTENT = 40_000   # chars returned per page to the agent
 _WS_MIN_CONTENT = 150      # skip pages with less content than this
+# RAI_FETCH_SSL_VERIFY=0 disables SSL verification (e.g. corporate MITM proxy)
+_SSL_VERIFY: bool = os.environ.get("RAI_FETCH_SSL_VERIFY", "1") != "0"
+
+# RAI_SEARCH_BACKEND: comma-separated backend(s) or "auto" (default).
+# Available: auto, brave, duckduckgo, google, startpage, yahoo, yandex, mojeek
+# Examples: "google", "brave,google", "auto"
+_WS_BACKEND = os.environ.get("RAI_SEARCH_BACKEND", "auto")
 
 _WS_HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; RAI/1.0; +https://example.com/rai)",
 }
 
 
-def _ws_search_ddg(query: str, max_results: int) -> list[dict]:
+def _ws_search_ddgs(query: str, max_results: int, backend: str) -> list[dict]:
+    """Search via ddgs library (uses primp/HTTP2 internally)."""
     try:
-        from duckduckgo_search import DDGS
-        with DDGS() as ddgs:
-            return list(ddgs.text(query, max_results=max_results))
+        from ddgs import DDGS
     except ImportError:
-        raise RuntimeError("duckduckgo-search not installed: pip install duckduckgo-search")
+        try:
+            from duckduckgo_search import DDGS  # type: ignore[no-redef]
+        except ImportError:
+            raise RuntimeError("ddgs not installed: pip install ddgs")
+    with DDGS(verify=_SSL_VERIFY) as d:
+        return list(d.text(query, max_results=max_results, backend=backend))
+
+
+def _ws_search_ddg_lite(query: str, max_results: int) -> list[dict]:
+    """Fallback: parse DDG Lite HTML via httpx (HTTP/1.1, proxy-friendly).
+
+    Used automatically when RAI_FETCH_SSL_VERIFY=0 and ddgs fails due to
+    HTTP/2 HPACK errors from MITM proxies that impersonation triggers.
+    """
+    import re
+    import urllib.parse
+    import httpx
+
+    url = "https://lite.duckduckgo.com/lite/"
+    params = {"q": query}
+    try:
+        with httpx.Client(http2=False, verify=_SSL_VERIFY, timeout=_WS_FETCH_TIMEOUT) as client:
+            resp = client.get(
+                url, params=params,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; RAI/1.0)"},
+            )
+        resp.raise_for_status()
     except Exception as e:
-        raise RuntimeError(f"DDG search failed: {e}") from e
+        raise RuntimeError(f"DDG lite fallback failed: {e}") from e
+
+    html = resp.text
+    results: list[dict] = []
+
+    # DDG lite attr order: href='...' class='result-link'>Title</a>
+    hrefs = re.findall(r"href=['\"]([^'\"]+)['\"][^>]*class=['\"]result-link['\"]", html)
+    titles = re.findall(r"class=['\"]result-link['\"]>(.*?)</a>", html, re.S)
+    snippets = re.findall(r"class=['\"]result-snippet['\"][^>]*>(.*?)</td>", html, re.S)
+
+    for i, (href, title) in enumerate(zip(hrefs, titles)):
+        m = re.search(r"uddg=([^&'\"]+)", href)
+        real_url = urllib.parse.unquote(m.group(1)) if m else href
+        title = re.sub(r"<[^>]+>", "", title).strip()
+        snippet = re.sub(r"<[^>]+>", "", snippets[i]).strip() if i < len(snippets) else ""
+        if real_url and title:
+            results.append({"title": title, "href": real_url, "body": snippet})
+        if len(results) >= max_results:
+            break
+
+    return results
 
 
-async def _ws_get_results(query: str, max_results: int) -> list[dict]:
-    import asyncio
-    return await asyncio.to_thread(_ws_search_ddg, query, max_results)
+def _ws_search(query: str, max_results: int, backend: str = _WS_BACKEND) -> list[dict]:
+    """Search with automatic fallback: ddgs → DDG lite (when SSL verify disabled)."""
+    try:
+        return _ws_search_ddgs(query, max_results, backend)
+    except Exception as e:
+        err = str(e)
+        # HTTP/2 HPACK errors from MITM proxies — fall back to plain HTTP/1.1 DDG lite
+        if not _SSL_VERIFY and ("HPACK" in err or "LocalProtocol" in err or "ConnectError" in err):
+            return _ws_search_ddg_lite(query, max_results)
+        raise RuntimeError(f"Search failed [{backend}]: {e}") from e
+
+
 
 
 async def _ws_fetch_page(url: str) -> str | None:
+    """Fetch a single page for web_search result enrichment. Uses shared _html_to_markdown."""
     import httpx
     try:
         async with httpx.AsyncClient(
             timeout=_WS_FETCH_TIMEOUT,
             follow_redirects=True,
             headers=_WS_HEADERS,
+            verify=_SSL_VERIFY,
         ) as client:
             resp = await client.get(url)
             resp.raise_for_status()
@@ -435,30 +498,8 @@ async def _ws_fetch_page(url: str) -> str | None:
     except Exception:
         return None
 
-    try:
-        import trafilatura
-        content = trafilatura.extract(
-            html,
-            output_format="markdown",
-            include_links=False,
-            include_tables=True,
-            include_images=False,
-            no_fallback=False,
-        )
-    except Exception:
-        content = None
-
-    if not content or len(content) < _WS_MIN_CONTENT:
-        # Readability fallback (optional dep)
-        try:
-            from readability import Document
-            import re as _re
-            doc = Document(html)
-            content = _re.sub(r"<[^>]+>", " ", doc.summary(html_partial=True)).strip()
-        except Exception:
-            return None
-
-    if not content or len(content) < _WS_MIN_CONTENT:
+    content = _html_to_markdown(html)
+    if not content:
         return None
     return content[:_WS_MAX_CONTENT]
 
@@ -467,6 +508,15 @@ class WebSearchInput(BaseModel):
     query: str = Field(description="Search query.")
     max_results: int = Field(default=5, description="Max search results to retrieve.")
     fetch_top_n: int = Field(default=3, description="How many top URLs to fetch and extract content from.")
+    backend: str = Field(
+        default="auto",
+        description=(
+            "Search backend(s) to use. 'auto' tries all available engines. "
+            "Options: auto, brave, duckduckgo, google, startpage, yahoo, yandex, mojeek. "
+            "Comma-separate multiple: 'brave,google'. "
+            "Override default via RAI_SEARCH_BACKEND env var."
+        ),
+    )
     allowed_domains: list[str] = Field(
         default_factory=list,
         description="Only include results from these domains (e.g. ['nvd.nist.gov', 'github.com']).",
@@ -494,43 +544,34 @@ class WebSearchTool(BaseTool):
         query: str,
         max_results: int = _WS_MAX_RESULTS,
         fetch_top_n: int = _WS_FETCH_TOP_N,
+        backend: str = _WS_BACKEND,
         allowed_domains: list[str] | None = None,
         blocked_domains: list[str] | None = None,
         **_kwargs: Any,
     ) -> str:
         import asyncio
+        import concurrent.futures
+        coro = self._arun(
+            query=query,
+            max_results=max_results,
+            fetch_top_n=fetch_top_n,
+            backend=backend,
+            allowed_domains=allowed_domains or [],
+            blocked_domains=blocked_domains or [],
+        )
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                    return ex.submit(
-                        asyncio.run,
-                        self._arun(
-                            query=query,
-                            max_results=max_results,
-                            fetch_top_n=fetch_top_n,
-                            allowed_domains=allowed_domains or [],
-                            blocked_domains=blocked_domains or [],
-                        ),
-                    ).result()
-            return loop.run_until_complete(
-                self._arun(
-                    query=query,
-                    max_results=max_results,
-                    fetch_top_n=fetch_top_n,
-                    allowed_domains=allowed_domains or [],
-                    blocked_domains=blocked_domains or [],
-                )
-            )
-        except Exception as exc:
-            return f"[web_search error] {exc}"
+            asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                return ex.submit(asyncio.run, coro).result()
+        except RuntimeError:
+            return asyncio.run(coro)
 
     async def _arun(  # type: ignore[override]
         self,
         query: str,
         max_results: int = _WS_MAX_RESULTS,
         fetch_top_n: int = _WS_FETCH_TOP_N,
+        backend: str = _WS_BACKEND,
         allowed_domains: list[str] | None = None,
         blocked_domains: list[str] | None = None,
         **_kwargs: Any,
@@ -539,7 +580,7 @@ class WebSearchTool(BaseTool):
 
         # 1. Search
         try:
-            raw = await _ws_get_results(query, max_results)
+            raw = await asyncio.to_thread(_ws_search, query, max_results, backend)
         except Exception as exc:
             return f"[web_search error] {exc}"
 
@@ -588,39 +629,35 @@ class WebSearchTool(BaseTool):
 # Web fetch tool
 # ---------------------------------------------------------------------------
 
-_WF_MAX_CONTENT = 80_000   # larger than search — agent asked for this page specifically
+# Chunk size the agent receives per call — reads the page in windows like bash `head`/`tail`.
+# RAI_FETCH_CHUNK_SIZE controls this; default 5000 chars (~1250 tokens).
+_WF_CHUNK_SIZE   = int(os.environ.get("RAI_FETCH_CHUNK_SIZE", "5000"))
+_WF_MAX_TOTAL    = int(os.environ.get("RAI_FETCH_MAX_TOTAL",  "200000"))  # hard cap on full page
+_WF_TIMEOUT      = int(os.environ.get("RAI_FETCH_TIMEOUT",    str(_WS_FETCH_TIMEOUT)))
+
+_WF_USER_AGENT = (
+    "ModelContextProtocol/1.0 (Autonomous; +https://github.com/modelcontextprotocol/servers)"
+)
 
 
-async def _wf_fetch(url: str) -> tuple[str | None, str | None]:
-    """Fetch *url* and extract Markdown. Returns (content, error); one will be None."""
-    import re as _re
-    import httpx
-
+def _html_to_markdown(html: str) -> str:
+    """Convert HTML to clean Markdown. Primary: markdownify. Fallback: trafilatura."""
+    # Primary: markdownify — clean, link-preserving, heading-aware
     try:
-        async with httpx.AsyncClient(
-            timeout=_WS_FETCH_TIMEOUT,
-            follow_redirects=False,       # report redirects to the agent, don't auto-follow
-            headers=_WS_HEADERS,
-        ) as client:
-            resp = await client.get(url)
+        import markdownify as _md
+        content = _md.markdownify(html, heading_style=_md.ATX, strip=["script", "style"])
+        # collapse excessive blank lines
+        import re as _re
+        content = _re.sub(r"\n{3,}", "\n\n", content).strip()
+        if content and len(content) >= _WS_MIN_CONTENT:
+            return content
+    except Exception:
+        pass
 
-            if resp.is_redirect:
-                location = resp.headers.get("location", "")
-                return None, (
-                    f"REDIRECT {resp.status_code} → {location}. "
-                    "Call web_fetch again with the redirect URL to continue."
-                )
-            resp.raise_for_status()
-            html = resp.text
-    except httpx.HTTPStatusError as exc:
-        return None, f"HTTP {exc.response.status_code}: {exc.response.reason_phrase}"
-    except Exception as exc:
-        return None, str(exc)
-
-    # Extract Markdown (links preserved — agent may need to follow them)
+    # Fallback: trafilatura
     try:
         import trafilatura
-        content: str | None = trafilatura.extract(
+        content = trafilatura.extract(
             html,
             output_format="markdown",
             include_links=True,
@@ -628,52 +665,76 @@ async def _wf_fetch(url: str) -> tuple[str | None, str | None]:
             include_images=False,
             no_fallback=False,
         )
+        if content and len(content) >= _WS_MIN_CONTENT:
+            return content
     except Exception:
-        content = None
+        pass
 
-    if not content or len(content) < _WS_MIN_CONTENT:
-        try:
-            from readability import Document
-            doc = Document(html)
-            content = _re.sub(r"<[^>]+>", " ", doc.summary(html_partial=True)).strip()
-        except Exception:
-            pass
+    return ""
 
-    if not content or len(content) < _WS_MIN_CONTENT:
-        return None, "Could not extract readable content from page."
 
-    return content[:_WF_MAX_CONTENT], None
+async def _wf_fetch_raw(url: str) -> tuple[str, str, str]:
+    """Fetch URL. Returns (html_or_raw, content_type, error). On error html_or_raw is ""."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(
+            timeout=_WF_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": _WF_USER_AGENT},
+            verify=_SSL_VERIFY,
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            return resp.text, resp.headers.get("content-type", ""), ""
+    except httpx.HTTPStatusError as exc:
+        return "", "", f"HTTP {exc.response.status_code}: {exc.response.reason_phrase}"
+    except Exception as exc:
+        return "", "", str(exc)
 
 
 class WebFetchInput(BaseModel):
-    url: str = Field(description="Full URL to fetch (https://...). Use URLs from web_search results or user-provided links.")
+    url: str = Field(
+        description="Full URL to fetch (https://...). Use URLs from web_search results or user-provided links.",
+    )
     prompt: str = Field(
         default="",
         description=(
             "What to look for on this page — guides your reading. "
-            "Examples: 'What is the CVSS score?', 'Find the PoC exploit code', 'Summarize the scope section'."
+            "E.g. 'What is the CVSS score?', 'Find the PoC exploit code'."
         ),
+    )
+    start_index: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Character offset to start reading from. "
+            "Use the next_start value from a previous truncated response to read the next chunk."
+        ),
+    )
+    raw: bool = Field(
+        default=False,
+        description="Return raw HTML/text instead of extracted Markdown. Use when Markdown conversion loses important content.",
     )
 
 
 class WebFetchTool(BaseTool):
-    """Fetch a URL and return its extracted Markdown content.
+    """Fetch a URL and return its content as Markdown, with chunk-by-chunk reading.
 
-    Use when you already have a specific URL to read (e.g. from web_search
-    results, a CVE advisory link, or a user-provided URL). Unlike web_search,
-    this tool fetches one page at full depth rather than scanning many results.
+    Reads pages in configurable chunks (default 5000 chars, ~1250 tokens).
+    When the page is longer, the response includes a next_start index — call
+    web_fetch again with that start_index to read the next window.
 
-    Cross-host redirects are reported back rather than silently followed —
-    the agent can decide whether to follow them.
+    Supports robots.txt-respecting fetch, markdownify HTML extraction,
+    trafilatura fallback, and raw mode for structured data / APIs.
     """
 
     name: str = "web_fetch"
     description: str = (
-        "Fetch a specific URL and return its full page content as Markdown. "
-        "Use after web_search when you need to read the full content of a result, "
-        "or when the user provides a direct link. "
-        "Good for: CVE detail pages, exploit writeups, API docs, bug bounty scopes, "
-        "security blog posts, GitHub issues, NVD entries."
+        "Fetch a specific URL and return its content as Markdown. "
+        "Reads in chunks — if truncated, use the returned next_start index to continue. "
+        "Use after web_search when you need the full content of a result, "
+        "or for direct links: CVE pages, exploit writeups, API docs, bug bounty scopes, "
+        "GitHub issues, NVD entries, security advisories."
     )
     args_schema: ClassVar[type[BaseModel]] = WebFetchInput
 
@@ -681,34 +742,85 @@ class WebFetchTool(BaseTool):
         self,
         url: str,
         prompt: str = "",
+        start_index: int = 0,
+        raw: bool = False,
         **_kwargs: Any,
     ) -> str:
         import asyncio
+        import concurrent.futures
+        coro = self._arun(url=url, prompt=prompt, start_index=start_index, raw=raw)
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                    return ex.submit(asyncio.run, self._arun(url=url, prompt=prompt)).result()
-            return loop.run_until_complete(self._arun(url=url, prompt=prompt))
-        except Exception as exc:
-            return f"[web_fetch error] {exc}"
+            asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                return ex.submit(asyncio.run, coro).result()
+        except RuntimeError:
+            return asyncio.run(coro)
 
     async def _arun(  # type: ignore[override]
         self,
         url: str,
         prompt: str = "",
+        start_index: int = 0,
+        raw: bool = False,
         **_kwargs: Any,
     ) -> str:
-        content, error = await _wf_fetch(url)
+        html, content_type, error = await _wf_fetch_raw(url)
 
         if error:
             return f"[web_fetch] {url}\nError: {error}"
 
+        # Decide whether to extract Markdown or return raw
+        is_html = (
+            "<html" in html[:200].lower()
+            or "text/html" in content_type
+            or not content_type
+        )
+
+        if is_html and not raw:
+            content = _html_to_markdown(html)
+            if not content:
+                return (
+                    f"[web_fetch] {url}\n"
+                    "Could not extract readable content. "
+                    "Retry with raw=true to get the raw HTML."
+                )
+        else:
+            content = html
+            if not raw:
+                # Non-HTML (JSON, XML, plain text) — return as-is with note
+                prefix = f"[Content-Type: {content_type}]\n"
+                content = prefix + content
+
+        # Hard cap before chunking
+        content = content[:_WF_MAX_TOTAL]
+        total_len = len(content)
+
+        # Validate start_index
+        if start_index >= total_len:
+            return (
+                f"[web_fetch] {url}\n"
+                f"<error>start_index {start_index} is past end of content "
+                f"({total_len} chars total). No more content available.</error>"
+            )
+
+        chunk = content[start_index : start_index + _WF_CHUNK_SIZE]
+        chunk_end = start_index + len(chunk)
+        remaining = total_len - chunk_end
+
         lines = [f"## {url}"]
         if prompt:
             lines.append(f"*Prompt: {prompt}*\n")
-        lines.append(content)  # type: ignore[arg-type]
+        lines.append(f"*Showing chars {start_index}–{chunk_end} of {total_len} total*\n")
+        lines.append(chunk)
+
+        if remaining > 0:
+            lines.append(
+                f"\n<truncated> {remaining} chars remaining. "
+                f"Call web_fetch with start_index={chunk_end} to read the next chunk.</truncated>"
+            )
+        else:
+            lines.append("\n*[end of page]*")
+
         return "\n".join(lines)
 
 

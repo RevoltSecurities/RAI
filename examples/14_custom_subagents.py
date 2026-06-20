@@ -3,8 +3,14 @@
 Demonstrates:
   - Defining custom subagents inline via add_subagent() / add_subagents()
   - Giving each subagent a completely different model, API key, and system prompt
-  - Mixing custom subagents with built-in subagents
-  - Using without_subagents() + custom list for a fully controlled team
+  - Three subagent loading modes:
+      Mode A — without_subagents() + add_subagents() → ONLY user-supplied subagents,
+               no AGENTS.md, no ~/.rai/agents/ auto-discovery. Agent gets exactly
+               what you pass and nothing else.
+      Mode B — with_subagents() (default) + add_subagent() → built-in AGENTS.md
+               subagents loaded, custom ones merged on top (custom wins on name clash).
+      Mode C — without_subagents() (no add_subagent calls) → no delegation capability
+               at all, agent operates as a single unit.
   - CompiledSubAgent for injecting a pre-built Pregel graph as a subagent
   - AsyncSubAgent for delegating to a remote Agent Protocol server
 
@@ -18,8 +24,17 @@ Custom subagent dict fields:
     tools          (optional) — list of extra BaseTool instances
 
 Usage:
-    python examples/14_custom_subagents.py --target example.com
-    python examples/14_custom_subagents.py \\
+    # Mode A: user-supplied subagents only (no AGENTS.md)
+    python examples/14_custom_subagents.py --target example.com --mode custom
+
+    # Mode B: built-in AGENTS.md subagents + custom exploit-coder merged on top
+    python examples/14_custom_subagents.py --target example.com --mode mixed
+
+    # Mode C: no subagents at all — single autonomous agent
+    python examples/14_custom_subagents.py --target example.com --mode solo
+
+    # Multi-model team (fast recon model + best code model)
+    python examples/14_custom_subagents.py --target example.com \\
         --main-model anthropic:claude-sonnet-4-6 --main-key sk-ant-... \\
         --fast-model groq/llama-3.3-70b-versatile --fast-key gsk_... \\
         --code-model openai/gpt-4o --code-key sk-...
@@ -30,8 +45,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from rai import DEFAULT_MODEL
-from rai.sdk import RAIAgentBuilder, get_security_tools, get_web_tools
+from rai.sdk import RAIAgentBuilder, get_security_tools, get_web_tools, DEFAULT_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +167,11 @@ Final deliverable: executive summary + full technical report in markdown.
 
 
 # ---------------------------------------------------------------------------
-# Example 1: Fully custom team (replaces built-in subagents entirely)
+# Mode A: User-only subagents — without_subagents() + add_subagents()
 # ---------------------------------------------------------------------------
+# AGENTS.md and ~/.rai/agents/ are NOT loaded.
+# The agent receives EXACTLY the subagents you pass — nothing more.
+# This is the correct pattern when you want full control and no surprises.
 
 async def run_custom_team(
     target: str,
@@ -165,20 +182,17 @@ async def run_custom_team(
     code_model: str,
     code_key: str,
 ) -> None:
-    """
-    Replace all built-in subagents with a fully custom team.
-
-    without_subagents() skips AGENTS.md loading entirely.
-    add_subagents() injects only the specified custom subagents.
-    """
+    """Mode A: disable all auto-discovered subagents, use only user-supplied team."""
     subagents = build_subagents(fast_model, fast_key, code_model, code_key)
 
     builder = (
         RAIAgentBuilder()
         .agent_name("rai")
         .model(main_model)
-        .without_subagents()            # skip AGENTS.md loading
-        .add_subagents(subagents)       # inject custom team instead
+        # Disable ALL auto-discovery: AGENTS.md + ~/.rai/agents/ TOML files skipped.
+        .without_subagents()
+        # Provide ONLY your own subagents — nothing else will be loaded.
+        .add_subagents(subagents)
         .add_tools(get_security_tools())
         .target(target)
         .with_hitl()
@@ -187,7 +201,7 @@ async def run_custom_team(
         builder = builder.api_key(main_key)
 
     async with await builder.build() as agent:
-        print("Custom subagent team:")
+        print("Mode A — user-only subagent team (no AGENTS.md):")
         for s in subagents:
             model_label = s.get("model", f"{main_model} (inherited)")
             print(f"  {s['name']:<20} → {model_label}")
@@ -202,8 +216,38 @@ async def run_custom_team(
 
 
 # ---------------------------------------------------------------------------
-# Example 2: Mix custom subagents with built-in ones
+# Mode C: No subagents at all — single-agent operation
 # ---------------------------------------------------------------------------
+# without_subagents() with no add_subagent() calls = no delegation capability.
+# Agent handles everything itself. Useful for simple tasks or constrained envs.
+
+async def run_solo_agent(target: str, main_model: str, main_key: str) -> None:
+    """Mode C: single agent, no delegation, no AGENTS.md loading."""
+    builder = (
+        RAIAgentBuilder()
+        .agent_name("rai")
+        .model(main_model)
+        # No subagents at all — agent operates as a single autonomous unit.
+        .without_subagents()
+        # (no add_subagent() calls)
+        .add_tools(get_security_tools())
+        .target(target)
+        .without_hitl()
+    )
+    if main_key:
+        builder = builder.api_key(main_key)
+
+    async with await builder.build() as agent:
+        print("Mode C — solo agent (no subagents):")
+        await agent.run(f"Perform a quick passive recon of {target} and summarise findings.")
+        print(f"\nDone. Thread: {agent.thread_id}")
+
+
+# ---------------------------------------------------------------------------
+# Mode B: Merge custom subagents with auto-discovered ones (default)
+# ---------------------------------------------------------------------------
+# AGENTS.md + TOML files ARE loaded. Your custom subagents are merged on top.
+# If a custom subagent has the same name as a built-in one, yours wins.
 
 async def run_mixed_team(
     target: str,
@@ -259,8 +303,12 @@ and Nuclei templates for vulnerabilities confirmed by the recon and researcher a
 def main() -> None:
     parser = argparse.ArgumentParser(description="RAI custom subagent registration example")
     parser.add_argument("--target", required=True, help="Target hostname, IP, or URL")
-    parser.add_argument("--mode", choices=["custom", "mixed"], default="custom",
-                        help="custom=fully custom team, mixed=built-in + custom coder")
+    parser.add_argument("--mode", choices=["custom", "mixed", "solo"], default="custom",
+                        help=(
+                            "custom=user-only subagents (no AGENTS.md), "
+                            "mixed=built-in + custom merged, "
+                            "solo=no subagents at all"
+                        ))
 
     # Main agent
     parser.add_argument("--main-model", default=DEFAULT_MODEL)
@@ -289,11 +337,13 @@ def main() -> None:
             args.target, args.main_model, args.main_key,
             fast_model, fast_key, code_model, code_key,
         ))
-    else:
+    elif args.mode == "mixed":
         asyncio.run(run_mixed_team(
             args.target, args.main_model, args.main_key,
             code_model, code_key,
         ))
+    else:  # solo
+        asyncio.run(run_solo_agent(args.target, args.main_model, args.main_key))
 
 
 if __name__ == "__main__":

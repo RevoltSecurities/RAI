@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Container
+from textual.containers import Container, Horizontal
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Label, SelectionList
+from textual.widgets import Footer, Label, SelectionList, Static
 
 
 class ThemePickerScreen(ModalScreen):
@@ -22,15 +21,24 @@ class ThemePickerScreen(ModalScreen):
         border: round $accent;
         padding: 1 2;
     }
+    #theme-header {
+        height: 1;
+        margin-bottom: 1;
+    }
+    #theme-header-title {
+        width: 1fr;
+    }
+    #theme-close {
+        width: 3;
+        text-align: right;
+        color: $error;
+        text-style: bold;
+    }
     #theme-modal-shell SelectionList {
         height: auto;
         max-height: 20;
     }
     """
-
-    BINDINGS = [
-        Binding("escape", "dismiss", "Close"),
-    ]
 
     def __init__(self, current_theme: str = "rai", **kwargs) -> None:
         super().__init__(**kwargs)
@@ -38,7 +46,9 @@ class ThemePickerScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Container(id="theme-modal-shell"):
-            yield Label("Theme Picker  [dim][enter] apply  [esc] close[/dim]")
+            with Horizontal(id="theme-header"):
+                yield Label("Theme Picker  [dim][enter] apply[/dim]", id="theme-header-title")
+                yield Static("[bold red]\\[x][/bold red]", id="theme-close")
             # Build list from registered themes only — avoids InvalidThemeError
             available = sorted(self.app.available_themes.keys())
             if not available:
@@ -54,6 +64,10 @@ class ThemePickerScreen(ModalScreen):
             if theme in self.app.available_themes:
                 self.app.theme = theme  # type: ignore[attr-defined]
                 self.dismiss(theme)
+
+    def on_click(self, event) -> None:
+        if getattr(event.widget, "id", None) == "theme-close":
+            self.dismiss(None)
 
     def action_dismiss(self) -> None:
         self.dismiss(None)

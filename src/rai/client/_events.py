@@ -471,6 +471,28 @@ class SubagentTurnCompleteEvent:
 
 
 # ---------------------------------------------------------------------------
+# Plan discipline events (escalation, scope change)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StepEscalatedEvent:
+    run_id: str = ""
+    step_number: int = 0
+    priority: str = ""
+    old_priority: str = ""
+    reason: str = ""
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class StepsAddedEvent:
+    run_id: str = ""
+    steps: list[dict[str, Any]] = field(default_factory=list)
+    reason: str = ""
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -519,6 +541,8 @@ _EVENT_MAP: dict[str, type] = {
     "subagent_completed": SubagentCompletedEvent,
     "subagent_resumed": SubagentResumedEvent,
     "subagent_turn_complete": SubagentTurnCompleteEvent,
+    "step_escalated": StepEscalatedEvent,
+    "steps_added": StepsAddedEvent,
 }
 
 

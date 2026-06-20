@@ -41,7 +41,9 @@ from rai.config.settings import settings
 from rai.defaults.agents import ensure_default_agents
 from rai.defaults.skills import ensure_default_skills
 from rai.agents.background import LocalAsyncAgentMiddleware
+from rai.harness.subagents_v2 import AsyncRaiSubagentsMiddleware, build_subagent_system_section
 from rai.middleware.audit import AuditLogMiddleware
+from rai.middleware.allowed_tools import AllowedToolsMiddleware
 from rai.middleware.sanitizer import EmptyContentSanitizerMiddleware
 from rai.middleware.execute import ExecuteInterceptorMiddleware
 from rai.middleware.compression import MessageCompressionMiddleware
@@ -274,9 +276,15 @@ def _build_interrupt_on() -> dict[str, InterruptOnConfig]:
         "write_file": {**rw, "description": "Create or overwrite a file"},
         "edit_file":  {**rw, "description": "Modify an existing file"},
         "read_file":  {**ro, "description": "Read a file from disk"},
-        # ---- subagents ----
+        # ---- subagents (legacy) ----
         "task":            {**rw, "description": "Spawn a subagent with tool access"},
         "create_subagent": {**rw, "description": "Create and dispatch a subagent"},
+        # ---- subagents (v2 async) ----
+        "Subagent":        {**rw, "description": "Launch a background subagent"},
+        "MultiSubagents":  {**rw, "description": "Launch multiple subagents in parallel"},
+        "Pipeline":        {**rw, "description": "Launch a DAG pipeline of subagents"},
+        "SubagentCancel":  {**rw, "description": "Cancel a running subagent"},
+        "SubagentUpdate":  {**rw, "description": "Send follow-up to a subagent"},
         # ---- web / network ----
         "web_search":   {**ro, "description": "Search the web"},
         "web_fetch":    {**ro, "description": "Fetch a URL"},
@@ -371,6 +379,7 @@ def _postprocess_subagents(
     *,
     parent_api_key: str = "",
     parent_base_url: str = "",
+    parent_model: str = "",
 ) -> list[dict]:
     """Prepare subagent dicts before passing to create_deep_agent.
 
@@ -432,10 +441,13 @@ def _postprocess_subagents(
         effective_temperature = sub_cfg.temperature if sub_cfg else 0.7
         effective_max_tokens = sub_cfg.max_tokens if sub_cfg else 8192
 
-        # Model resolution: AGENTS.md > config.toml > absent (inherits parent)
+        # Model resolution: AGENTS.md > config.toml > parent_model > absent
         model_val = sa.get("model")
         if model_val is None and sub_cfg and sub_cfg.model:
             model_val = sub_cfg.model
+            sa["model"] = model_val
+        if model_val is None and parent_model:
+            model_val = parent_model
             sa["model"] = model_val
 
         # Pre-resolve ALL string models to BaseChatModel with credentials baked in.
@@ -693,6 +705,11 @@ def create_rai_agent(
     if enable_audit_log:
         agent_middleware.append(AuditLogMiddleware(log_path=settings.ensure_audit_log()))
 
+    # 2b. Allowed tools enforcement (B3) — hard-blocks disallowed tool calls before
+    #     any other interceptor sees them.  The active whitelist is communicated via
+    #     a ContextVar set by execute_run(); None means unrestricted (zero overhead).
+    agent_middleware.append(AllowedToolsMiddleware())
+
     # 3. Hooks — Claude Code–compatible PreToolUse/PostToolUse/model lifecycle hooks.
     #    Sits after audit log (audit records all calls) but before execute interceptor
     #    (hooks see the original tool name, e.g. "execute" or "bash").
@@ -713,8 +730,32 @@ def create_rai_agent(
         window=int(os.environ.get("RAI_LOOP_WINDOW", 10)),
     ))
 
-    # 4. Execute interceptor — routes deepagents' built-in execute tool through
-    #    RAI BashTool (env isolation, stderr labelling, /tmp spill, allowlist).
+    # 3.6. Read-file deduplication — return compact stub for unchanged file re-reads
+    #      beyond LoopDetection's 10-call window. Saves 95%+ tokens on redundant reads.
+    #      Uses os.stat mtime to detect changes — zero I/O for unchanged files.
+    from rai.middleware.read_dedup import ReadFileDedupMiddleware
+    agent_middleware.append(ReadFileDedupMiddleware())
+
+    # 3.7. Subagent restriction — block deepagents' `task` tool for subagents.
+    #      Prevents recursive sub-sub-agent spawning. Only active when is_subagent=True.
+    if is_subagent:
+        from rai.middleware.subagent_restrict import SubagentRestrictMiddleware
+        agent_middleware.append(SubagentRestrictMiddleware())
+
+    # 4. Docker router — intercept bash/execute tool calls → docker exec in user's container.
+    #    Only activates when BOTH RAI_DOCKER_ENV=1 AND RAI_DOCKER_IMAGE is set.
+    #    No default image — user must explicitly provide one.
+    _docker_image = os.environ.get("RAI_DOCKER_IMAGE", "")
+    if os.environ.get("RAI_DOCKER_ENV", "0") == "1" and _docker_image:
+        from rai.middleware.docker_router import DockerRouterMiddleware
+        agent_middleware.append(DockerRouterMiddleware(
+            image=_docker_image,
+            container_name=os.environ.get("RAI_DOCKER_CONTAINER", "rai-kali"),
+        ))
+
+    # 4.1. Execute interceptor — routes deepagents' built-in execute tool through
+    #      RAI BashTool (env isolation, stderr labelling, /tmp spill, allowlist).
+    #      When Docker is active, this is never reached for bash/execute (Docker intercepts first).
     agent_middleware.append(ExecuteInterceptorMiddleware())
 
     # 4.5. Rate limiting — per-tool minimum delay (CLI > agent config > env > default)
@@ -722,6 +763,10 @@ def create_rai_agent(
     if effective_rate != "aggressive":
         from rai.middleware.ratelimit import RateLimitMiddleware
         agent_middleware.append(RateLimitMiddleware(profile=effective_rate))
+
+    # 4.6. Retry — auto-retry transient failures (timeouts, 429, 502/503) with backoff
+    from rai.middleware.retry import RetryMiddleware
+    agent_middleware.append(RetryMiddleware())
 
     # 5. Ask user — injects ask_user tool so the agent can pause and ask the user
     #    mid-task; uses langgraph interrupt() and the TUI AskUserMenu to collect answers.
@@ -840,6 +885,12 @@ def create_rai_agent(
     #        this now accurately measures the 75k char budget.
     agent_middleware.append(MessageCompressionMiddleware())
 
+    # 10.6. Write truncation — truncate file-write tool call args in ALL messages.
+    #        No keep_recent threshold: written content is on disk, always recoverable.
+    #        Saves 90%+ tokens on code-generation/security-report sessions.
+    from rai.middleware.write_truncate import WriteTruncateMiddleware
+    agent_middleware.append(WriteTruncateMiddleware())
+
     # 10.7. Tool result compaction — truncate old bash/file/http results and bash
     #        command args. Zero LLM cost. Never touches: human messages (carry
     #        <system-reminder> plan enforcement + subagent notifications), plan tools,
@@ -950,7 +1001,7 @@ def create_rai_agent(
     import os as _os
     if _os.environ.get("RAI_DEBUG_LOG_CALLS"):
         from rai.middleware.model_logger import ModelCallLoggerMiddleware
-        agent_middleware.append(ModelCallLoggerMiddleware())
+        agent_middleware.append(ModelCallLoggerMiddleware(agent_name=agent_name))
 
     # 12b. Request inspector — logs full request + optional MITM proxy (RAI_INSPECT=1).
     if _os.environ.get("RAI_INSPECT"):
@@ -968,6 +1019,10 @@ def create_rai_agent(
     #      cached on the next turn. Matches Claude Code's per-turn caching strategy.
     from rai.middleware.message_cache import LastHumanMessageCacheMiddleware
     agent_middleware.append(LastHumanMessageCacheMiddleware())
+
+    # 11.5. Cost tracking — accumulates per-request cost in contextvar from usage metadata
+    from rai.middleware.cost_tracking import CostTrackingMiddleware
+    agent_middleware.append(CostTrackingMiddleware())
 
     # 12. Empty content sanitizer — must be last (innermost) so it runs just before
     #     serialisation; strips empty text blocks that Bedrock rejects.
@@ -1014,6 +1069,7 @@ def create_rai_agent(
                 agent_name,
                 parent_api_key=cfg.api_key,
                 parent_base_url=cfg.base_url,
+                parent_model=effective_model if isinstance(effective_model, str) else "",
             )
             # Deduplicate: AGENTS.md wins over TOML for the same name
             agents_md_names = {s["name"] for s in agents_md_subagents}
@@ -1057,6 +1113,7 @@ def create_rai_agent(
             _resolved_subagents,
             parent_api_key=cfg.api_key,
             parent_base_url=cfg.base_url,
+            parent_model=effective_model if isinstance(effective_model, str) else "",
         )
 
         # Non-blocking background/parallel agent tools — launch subagents via
@@ -1064,26 +1121,34 @@ def create_rai_agent(
         # Skipped in HTTP harness mode where renamed HTTP tools fill this role.
         if _resolved_subagents and not suppress_local_async:
             agent_middleware.append(
-                LocalAsyncAgentMiddleware(
+                AsyncRaiSubagentsMiddleware(
                     subagents=_resolved_subagents,
-                    default_tools=tools,
                     default_model=resolved_model,
-                    backend=composite_backend,
                     checkpointer=checkpointer,
                     parent_api_key=cfg.api_key,
                     parent_base_url=cfg.base_url,
                 )
             )
 
+    # ---- Subagent defaults ----
+    # Subagents always run autonomously (no HITL) and get the full system prompt
+    # (not the slim 500-token default). Middleware gating (skip OPPLAN, PlanMode)
+    # is still controlled by is_subagent=True above.
+    if is_subagent:
+        auto_approve = True
+
     # ---- System prompt ----
     if system_prompt is None:
-        # Priority: ~/.rai/agents/<name>/prompt.md → slim subagent default → full RAI prompt
-        # Custom prompt.md lets users give specific subagents a richer-than-slim but
-        # cheaper-than-full prompt. Falls through to the 500-token slim default for
-        # generic subagents, saving ~14,000 tokens per turn vs the 14,500-token full prompt.
-        system_prompt = get_agent_prompt(agent_name, is_subagent=is_subagent)
+        # Priority: ~/.rai/agents/<name>/prompt.md → AGENTS.md body → full RAI prompt
+        # Subagents get the full RAI prompt as fallback (not the slim 500-token default)
+        # so they have full tool awareness and security methodology.
+        system_prompt = get_agent_prompt(agent_name, is_subagent=False)
     if system_prompt_extra:
         system_prompt = system_prompt + "\n\n" + system_prompt_extra
+
+    # Inject static subagent system prompt section (prompt-cached across all turns)
+    if _resolved_subagents and not suppress_local_async and not is_subagent:
+        system_prompt = system_prompt + "\n\n" + build_subagent_system_section(_resolved_subagents)
 
     # ---- Interrupt on (HITL) ----
     if auto_approve:

@@ -185,7 +185,13 @@ class RAIAgentBuilder:
         return self
 
     def without_subagents(self) -> RAIAgentBuilder:
-        """Skip AGENTS.md / TOML subagent loading. custom_subagents still apply."""
+        """Skip ALL auto-discovered subagents (AGENTS.md + TOML files).
+
+        When combined with add_subagent() / add_subagents(), only the
+        explicitly provided subagents are used — nothing from AGENTS.md or
+        ~/.rai/agents/ is loaded. Without any add_subagent() calls the agent
+        has no delegation capability at all.
+        """
         self._disable_subagents = True
         return self
 
@@ -412,7 +418,7 @@ class RAIAgentBuilder:
             enable_shell=self._enable_shell,
             enable_audit_log=self._enable_audit_log,
             disable_native_tools=not self._enable_native_tools,
-            disable_subagents=self._disable_subagents and not self._custom_subagents,
+            disable_subagents=self._disable_subagents,
             custom_subagents=self._custom_subagents or None,
             extra_middleware=self._custom_middleware or None,
             custom_backend=self._custom_backend,

@@ -5,13 +5,14 @@ from __future__ import annotations
 import difflib
 from typing import Any, ClassVar
 
+from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Static, TextArea
+from textual.widgets import Button, Static, TextArea
 
 from rai.tui.widgets.messages import _render_args_lines
 
@@ -308,7 +309,7 @@ class HITLPanel(Widget):
     """Handles both thread-level and subagent-level HITL interrupts."""
 
     can_focus = True
-    can_focus_children = False
+    can_focus_children = True
 
     DEFAULT_CSS = """
     HITLPanel {
@@ -318,7 +319,7 @@ class HITLPanel(Widget):
         border: round $warning 80%;
         padding: 1 2;
     }
-    HITLPanel:focus {
+    HITLPanel:focus-within {
         border: round $warning;
     }
     #hitl-title {
@@ -337,25 +338,34 @@ class HITLPanel(Widget):
         color: $text;
         margin: 0 1;
     }
+    #hitl-buttons {
+        height: 3;
+        align: center middle;
+        margin-top: 1;
+    }
+    #hitl-buttons Button {
+        margin: 0 1;
+        min-width: 10;
+    }
     #hitl-bindings {
         color: $text-muted;
-        margin-top: 1;
         text-align: center;
+        height: 1;
     }
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("1", "approve", "Approve", show=True),
+        Binding("1", "approve", "Approve", show=False),
         Binding("y", "approve", "Approve", show=False),
-        Binding("2", "edit", "Edit Args", show=True),
+        Binding("2", "edit", "Edit Args", show=False),
         Binding("e", "edit", "Edit Args", show=False),
-        Binding("3", "session_approve", "Session", show=True),
+        Binding("3", "session_approve", "Session", show=False),
         Binding("s", "session_approve", "Session", show=False),
-        Binding("4", "reject", "Reject", show=True),
+        Binding("4", "reject", "Reject", show=False),
         Binding("n", "reject", "Reject", show=False),
-        Binding("5", "respond", "Respond", show=True),
+        Binding("5", "respond", "Respond", show=False),
         Binding("r", "respond", "Respond", show=False),
-        Binding("escape", "dismiss", "Dismiss", show=True),
+        Binding("escape", "dismiss", "Dismiss", show=False),
     ]
 
     class Decision(Message):
@@ -388,8 +398,14 @@ class HITLPanel(Widget):
         yield Static("⚠ TOOL APPROVAL", id="hitl-title")
         with VerticalScroll(id="hitl-tool-scroll"):
             yield Static("", id="hitl-tool-info")
+        with Horizontal(id="hitl-buttons"):
+            yield Button("✓ Approve", id="hitl-btn-approve", variant="success")
+            yield Button("✎ Edit", id="hitl-btn-edit", variant="warning")
+            yield Button("◇ Session", id="hitl-btn-session", variant="primary")
+            yield Button("✗ Reject", id="hitl-btn-reject", variant="error")
+            yield Button("↩ Respond", id="hitl-btn-respond", variant="default")
         yield Static(
-            "[dim][1/y] Approve  [2/e] Edit  [3/s] Session  [4/n] Reject  [5/r] Respond  [esc] Dismiss[/dim]",
+            "[dim]y/1 approve  e/2 edit  s/3 session  n/4 reject  r/5 respond  esc dismiss[/dim]",
             id="hitl-bindings",
         )
 
@@ -461,6 +477,31 @@ class HITLPanel(Widget):
         )
         self.hide()
 
+    @on(Button.Pressed, "#hitl-btn-approve")
+    def _btn_approve(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_approve()
+
+    @on(Button.Pressed, "#hitl-btn-edit")
+    def _btn_edit(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_edit()
+
+    @on(Button.Pressed, "#hitl-btn-session")
+    def _btn_session(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_session_approve()
+
+    @on(Button.Pressed, "#hitl-btn-reject")
+    def _btn_reject(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_reject()
+
+    @on(Button.Pressed, "#hitl-btn-respond")
+    def _btn_respond(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_respond()
+
     def action_approve(self) -> None:
         self._post_decision(self._n_decisions("approve"))
 
@@ -495,6 +536,3 @@ class HITLPanel(Widget):
 
     def action_dismiss(self) -> None:
         self.hide()
-
-    def on_click(self) -> None:
-        self.focus()

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "revolt-rai"
-version = "2.0.2"
+version = "2.1.0"
 authors = [
     { name = "D. Sanjai Kumar" },
 ]
@@ -45,15 +45,20 @@ dependencies = [
     # HTTP server for rai chat / rai serve
     "fastapi>=0.115.0,<1.0.0",
     "uvicorn[standard]>=0.30.0,<1.0.0",
-    # Web search / page extraction
-    "duckduckgo-search>=6.0.0,<8.0.0",
+    # Web search / page extraction (multi-engine: brave, google, ddg, bing, yahoo…)
+    "ddgs>=9.0.0",
     "trafilatura>=2.0.0,<3.0.0",
+    "markdownify>=0.13.0",
+    # Claude SDK (no API key — uses Claude Code subscription)
+    "claude-agent-sdk>=0.2.89",
     # Utilities
     "python-dotenv>=1.0.0,<2.0.0",
     "pyyaml>=6.0.0",
     "tomli-w>=1.0.0,<2.0.0",
     "packaging>=23.0",
+    "platformdirs>=4.0.0",
     "uuid-utils>=0.10.0,<1.0.0",
+    "ddgs>=2.0.0",
 ]
 
 [project.optional-dependencies]

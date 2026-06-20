@@ -14,6 +14,7 @@ This is what enables `rai threads list` to filter/sort by agent, time, branch.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 import subprocess
@@ -388,6 +389,35 @@ def delete_thread_sync(thread_id: str) -> bool:
         return False
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Async wrappers — for use from async request handlers
+# ---------------------------------------------------------------------------
+
+
+async def list_threads_async(
+    agent_name: str | None = None,
+    limit: int = 20,
+    sort_by: str = "updated",
+) -> list[ThreadInfo]:
+    """Non-blocking version of list_threads_sync for use in async contexts."""
+    return await asyncio.to_thread(list_threads_sync, agent_name, limit, sort_by)
+
+
+async def get_thread_by_id_async(thread_id: str) -> ThreadInfo | None:
+    """Non-blocking version of get_thread_by_id_sync for use in async contexts."""
+    return await asyncio.to_thread(get_thread_by_id_sync, thread_id)
+
+
+async def thread_exists_async(thread_id: str) -> bool:
+    """Non-blocking version of thread_exists_sync for use in async contexts."""
+    return await asyncio.to_thread(thread_exists_sync, thread_id)
+
+
+async def delete_thread_async(thread_id: str) -> bool:
+    """Non-blocking version of delete_thread_sync for use in async contexts."""
+    return await asyncio.to_thread(delete_thread_sync, thread_id)
 
 
 # ---------------------------------------------------------------------------

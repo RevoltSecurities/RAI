@@ -18,6 +18,12 @@ What it NEVER touches:
   - The last `keep_recent` messages (default: 20) — verbatim for agent reasoning
   - ToolMessage results from plan, findings, memory, ask_user tools
   - Any result already short (< min_chars, default: 500 chars)
+  - ToolMessage results for read_file of "hot" files (recently written/edited)
+
+Working-set awareness:
+  Scans recent messages for write/edit tool calls and builds a set of "hot" file
+  paths. Read results for those files are preserved even beyond keep_recent, since
+  the agent likely needs them for verification after writes.
 
 Env vars for tuning:
   RAI_COMPACT_RESULT_KEEP      — last N messages never touched (default: 20)
@@ -35,6 +41,20 @@ from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, Mod
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 logger = logging.getLogger(__name__)
+
+# ── File-read and file-write tool names for working-set detection ─────────────
+
+_READ_FILE_TOOLS = frozenset({
+    "read_file", "view_file", "Read", "NotebookRead",
+})
+
+_WRITE_FILE_TOOLS = frozenset({
+    "write_file", "WriteFile", "create_file", "write_to_file",
+})
+
+_EDIT_FILE_TOOLS = frozenset({
+    "edit_file", "EditFile", "str_replace_editor", "replace_in_file",
+})
 
 # ── Tools whose ToolMessage results must never be truncated ──────────────────
 
@@ -94,6 +114,57 @@ class ToolResultCompressionMiddleware(AgentMiddleware):
         self._max_findings_arg_chars = max_findings_arg_chars
         self._min_chars = min_chars
 
+    # ── Working-set awareness helpers ─────────────────────────────────────────
+
+    def _extract_hot_files(self, msgs: list, cutoff: int) -> set[str]:
+        """Scan recent messages (msgs[cutoff:]) for write/edit tool calls.
+
+        Returns set of file paths that were recently written/edited — these are
+        the "hot" working set that should not be truncated when read.
+        """
+        hot: set[str] = set()
+        for msg in msgs[cutoff:]:
+            if not isinstance(msg, AIMessage):
+                continue
+            for tc in getattr(msg, "tool_calls", None) or []:
+                name = tc.get("name", "") or ""
+                if name in _WRITE_FILE_TOOLS or name in _EDIT_FILE_TOOLS:
+                    args = tc.get("args") or {}
+                    for key in ("file_path", "path", "filename", "file"):
+                        if key in args and args[key]:
+                            hot.add(str(args[key]))
+                            break
+        return hot
+
+    def _is_hot_file_read(
+        self, tool_msg: ToolMessage, all_msgs: list, hot_files: set[str],
+    ) -> bool:
+        """Check if a ToolMessage is a read result for a hot (recently-written) file.
+
+        Traces tool_call_id back to the AIMessage that issued it to find the path.
+        """
+        if not hot_files:
+            return False
+        tc_id = tool_msg.tool_call_id
+        if not tc_id:
+            return False
+        for msg in all_msgs:
+            if not isinstance(msg, AIMessage):
+                continue
+            for tc in getattr(msg, "tool_calls", None) or []:
+                if tc.get("id") == tc_id:
+                    name = tc.get("name", "") or ""
+                    if name not in _READ_FILE_TOOLS:
+                        return False
+                    args = tc.get("args") or {}
+                    for key in ("file_path", "path", "filename", "file"):
+                        if key in args and str(args[key]) in hot_files:
+                            return True
+                    return False
+        return False
+
+    # ── Core compression ──────────────────────────────────────────────────────
+
     def _compress(self, request: ModelRequest) -> ModelRequest:
         msgs = list(request.messages or [])
         if not msgs:
@@ -106,6 +177,9 @@ class ToolResultCompressionMiddleware(AgentMiddleware):
 
         changed = False
         new_msgs = list(msgs)
+
+        # Build working-set of recently-written file paths
+        hot_files = self._extract_hot_files(msgs, cutoff)
 
         for i in range(cutoff):
             msg = new_msgs[i]
@@ -122,6 +196,9 @@ class ToolResultCompressionMiddleware(AgentMiddleware):
             if isinstance(msg, ToolMessage):
                 tool_name = getattr(msg, "name", "") or ""
                 if tool_name in _NEVER_TRUNCATE_TOOL_RESULTS:
+                    continue
+                # Working-set protection: don't truncate reads of hot files
+                if self._is_hot_file_read(msg, new_msgs, hot_files):
                     continue
                 content = msg.content
                 if not isinstance(content, str):

@@ -32,7 +32,7 @@ import uvicorn
 
 from rai.sdk.builder import RAIAgentBuilder
 from rai.sdk.harness import HTTPConfig, RAIHTTPServer
-from rai.sdk.tui import RaiHttpTUI
+from rai.sdk.tui import RaiHttpTUI, BrandingConfig
 from rai.sdk.tools import (
     get_security_tools,
     get_builtin_tools,
@@ -230,18 +230,28 @@ def run(
     agents_label = " · ".join(f"[cyan]{n}[/cyan]" for n in registered)
 
     # 3. Open TUI on the first registered agent.
-    #    Custom banner — replace RAI logo with your own Rich markup.
+    #    BrandingConfig white-labels the TUI — icon, title, tips, extra info rows.
+    branding = BrandingConfig(
+        icon=(
+            "[bold yellow]┌─────────────────────────────────┐[/bold yellow]\n"
+            "[bold yellow]│  ⚔  RAI Security Platform  ⚔   │[/bold yellow]\n"
+            "[bold yellow]└─────────────────────────────────┘[/bold yellow]"
+        ),
+        title="Security Platform",
+        subtitle="Multi-Agent Mode",
+        tips=(
+            "[dim]/switch[/dim] agent  "
+            "[dim]·[/dim]  [dim]/new[/dim] thread  "
+            "[dim]·[/dim]  [dim]/threads[/dim] browse  "
+            "[dim]·[/dim]  [dim]ctrl+t[/dim] theme"
+        ),
+        info_rows=[("agents", " · ".join(registered))],
+    )
     tui = RaiHttpTUI(
         base_url=base,
         agent=registered[0],
         thread_id=thread_id or None,
-        banner=(
-            "[bold yellow]┌─────────────────────────────────┐[/bold yellow]\n"
-            "[bold yellow]│  ⚔  RAI Security Platform  ⚔   │[/bold yellow]\n"
-            "[bold yellow]└─────────────────────────────────┘[/bold yellow]\n"
-            f"[dim]Active agents:[/dim]  {agents_label}\n"
-            "[dim]Type /switch <name> to change the active agent[/dim]"
-        ),
+        branding=branding,
     )
     tui.run()
 

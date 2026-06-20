@@ -1,4 +1,4 @@
-"""PlanModeMiddleware — plan mode enforcement via system-reminder + write_todos interception."""
+"""PlanModeMiddleware — two-phase enforcement: hard tool blocking in Plan Phase, strict injection in Task Phase."""
 
 from __future__ import annotations
 
@@ -13,35 +13,13 @@ if TYPE_CHECKING:
     from langgraph.prebuilt.tool_node import ToolCallRequest
     from langgraph.types import Command
 
+BLOCKED_IN_PLAN = frozenset({
+    "execute", "bash", "write_file", "edit_file", "write_todos",
+})
+
 _REDIRECT_PERMANENT = (
-    "write_todos is not available in this agent. "
-    "Use plan-step tools instead: enter_plan_mode(), write_plan(content), "
-    "list_plan_steps(), enter_step(N), mark_step_done(N), mark_step_blocked(N, reason), "
-    "exit_plan_mode()."
-)
-
-_PLAN_MODE_REMINDER = """\
-Plan mode is ACTIVE. You MUST NOT call tools that execute, write, or modify state.
-Allowed tools: read_file, grep, glob, ls, read_todos, write_plan, list_plan_steps.
-
-BEFORE writing the plan: use ask_user() to clarify requirements. Ask the user:
-  • What is the exact goal or target scope?
-  • What outcomes do they expect from each phase?
-  • Any constraints, exclusions, or priorities they care about?
-Build a detailed picture of what they want — then submit your plan via write_plan().
-Do NOT write the plan until you have gathered enough context from the user.\
-"""
-
-_PLAN_WORKFLOW_REMINDER = (
-    "⚑ Plan workflow: call enter_plan_mode() → use ask_user() to gather requirements → "
-    "explore with read-only tools → write_plan(content) → wait for approval → execute. "
-    "Use ask_user() strictly to clarify scope, goals, and constraints BEFORE writing the plan. "
-    "Do NOT call write_todos before a plan has been approved."
-)
-
-_EXEC_ALL_DONE_REMINDER = (
-    "⚑ All plan steps are complete. "
-    "Call exit_plan_mode() to verify completion, then summarise what was accomplished and end the run."
+    "write_todos unavailable. Use: enter_plan_mode → write_plan → "
+    "enter_step(N) → mark_step_done(N) → exit_plan_mode."
 )
 
 
@@ -66,46 +44,72 @@ def _prepend_reminder(request: ModelRequest, text: str) -> ModelRequest:
 
 
 class PlanModeMiddleware(AgentMiddleware):
-    """Plan mode enforcement: proactive reminder + write_todos interception.
+    """Two-phase plan enforcement with hard tool blocking.
 
-    Two-layer approach matching Claude Code's trust-based EnterPlanMode:
-    1. wrap_model_call: injects <system-reminder> into the last user message each turn
-       so the LLM knows upfront it must not execute tools. System prompt never touched.
-       All tools remain loaded — no tool swapping (cache-safe).
-    2. wrap_tool_call: intercepts write_todos and redirects to write_plan() as a hard
-       backstop if the LLM tries to execute anyway.
+    Phase 1 (Plan Phase): plan_mode=True, plan_approved=False
+      - wrap_tool_call: HARD-BLOCKS destructive tools (bash, write, edit, execute)
+      - wrap_model_call: Injects "Plan Phase" workflow reminder
+      - Subagents, read, web, scan tools all ALLOWED
+
+    Phase 2 (Task Phase): plan_approved=True
+      - wrap_tool_call: ALL tools allowed (only redirects write_todos)
+      - wrap_model_call: Injects step enforcement reminder
+
+    Normal Mode: plan_mode=False, plan_approved=False
+      - NO injection, NO blocking — completely transparent
 
     Only added to the HTTP harness parent agent (when disable_opplan=True).
-    HTTP subagents compiled by executor.py do NOT get this middleware because
-    they call create_rai_agent() without disable_opplan=True — so subagents
-    can call write_todos freely for their own task tracking.
+    HTTP subagents do NOT get this middleware.
     """
 
     # ------------------------------------------------------------------
-    # Model call — proactive per-turn reminder (layer 1)
+    # Model call — phase-aware injection
     # ------------------------------------------------------------------
 
     def _inject_reminder(self, request: ModelRequest) -> ModelRequest:
         if self._is_plan_mode():
-            reminder = _PLAN_MODE_REMINDER
-        elif self._is_plan_approved():
-            all_steps = self._get_all_plan_steps()
-            incomplete = [s for s in all_steps if s.get("status") not in ("done", "blocked")]
-            if incomplete:
-                reminder = self._make_exec_steps_reminder(incomplete)
-            elif all_steps:
-                # All parsed steps are done
-                reminder = _EXEC_ALL_DONE_REMINDER
-            else:
-                # Plan had no parseable numbered/bulleted steps — guide execution
-                reminder = (
-                    "⚑ Plan approved. Execute the plan now. "
-                    "Call mark_step_done(N) after each numbered step you complete. "
-                    "Do NOT end the run until the plan is fully executed."
+            return _prepend_reminder(
+                request,
+                "<plan-harness-restricted>\n"
+                "PHASE: Plan (research only)\n"
+                "ENFORCEMENT: HARD — destructive tools (bash, write_file, edit_file, execute) "
+                "are BLOCKED by the harness and will return errors.\n"
+                "ALLOWED: read_file, grep, glob, web_search, web_fetch, http_request (GET), "
+                "Subagent, MultiSubagents, ask_user, list_plan_steps, read_plan.\n"
+                "ACTION REQUIRED: Research the task using allowed tools. "
+                "When research is complete, call write_plan(title, description, steps) "
+                "to submit a structured plan for user approval.\n"
+                "DO NOT attempt blocked tools — the harness will reject them.\n"
+                "</plan-harness-restricted>",
+            )
+
+        if self._is_plan_approved():
+            incomplete = self._get_incomplete_steps()
+            if not incomplete:
+                return _prepend_reminder(
+                    request,
+                    "<task-harness-notify>\n"
+                    "STATUS: All plan steps resolved.\n"
+                    "ACTION REQUIRED: Call exit_plan_mode() immediately to finalize "
+                    "and trigger self-learning memory phase.\n"
+                    "</task-harness-notify>",
                 )
-        else:
-            reminder = _PLAN_WORKFLOW_REMINDER
-        return _prepend_reminder(request, reminder)
+            steps_str = ", ".join(str(s["number"]) for s in incomplete)
+            return _prepend_reminder(
+                request,
+                f"<task-harness-enforce>\n"
+                f"PHASE: Task Execution\n"
+                f"PENDING: {len(incomplete)} step(s) [{steps_str}] — MUST be completed.\n"
+                f"ENFORCEMENT: You CANNOT end the conversation or ignore pending steps. "
+                f"The harness will re-invoke you until all steps are done or blocked.\n"
+                f"WORKFLOW: enter_step(N) → execute work → mark_step_done(N, notes=...) "
+                f"OR mark_step_blocked(N, reason=...).\n"
+                f"All tools are available. Execute the next pending step now.\n"
+                f"</task-harness-enforce>",
+            )
+
+        # Normal mode: NO injection whatsoever
+        return request
 
     def wrap_model_call(
         self,
@@ -122,30 +126,73 @@ class PlanModeMiddleware(AgentMiddleware):
         return await handler(self._inject_reminder(request))
 
     # ------------------------------------------------------------------
-    # Tool call — hard backstop interception (layer 2)
+    # Tool call — hard blocking in Plan Phase + write_todos redirect
     # ------------------------------------------------------------------
+
+    def _check_plan_block(self, request: ToolCallRequest) -> ToolMessage | None:
+        """Return a blocking ToolMessage if tool is forbidden in current phase, else None."""
+        tc = request.tool_call if hasattr(request, "tool_call") else {}
+        tool_name = tc.get("name", "") or ""
+        tool_call_id = tc.get("id", "") or ""
+
+        # write_todos is ALWAYS redirected (plan or task phase)
+        if tool_name == "write_todos":
+            return ToolMessage(tool_call_id=tool_call_id, content=_REDIRECT_PERMANENT)
+
+        # Only block in Plan Phase (plan_mode=True AND plan_approved=False)
+        if not self._is_plan_mode():
+            return None
+
+        if tool_name not in BLOCKED_IN_PLAN:
+            return None
+
+        return ToolMessage(
+            tool_call_id=tool_call_id,
+            content=(
+                f"<plan-harness-blocked>\n"
+                f"REJECTED: '{tool_name}' is not permitted during Plan Phase.\n"
+                f"REASON: Destructive/mutating tools are hard-blocked until plan approval.\n"
+                f"ALLOWED: read_file, grep, glob, web_search, web_fetch, http_request (GET), "
+                f"Subagent, MultiSubagents, ask_user, list_plan_steps, read_plan.\n"
+                f"ACTION: Use research tools to gather information, then call "
+                f"write_plan(title, description, steps) to submit your plan.\n"
+                f"</plan-harness-blocked>"
+            ),
+        )
 
     def wrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
     ) -> ToolMessage | Command:
-        if request.tool_call.get("name") != "write_todos":
-            return handler(request)
-        return ToolMessage(tool_call_id=request.tool_call.get("id", ""), content=_REDIRECT_PERMANENT)
+        try:
+            blocked = self._check_plan_block(request)
+            if blocked:
+                return blocked
+        except Exception:
+            pass
+        return handler(request)
 
     async def awrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
     ) -> ToolMessage | Command:
-        if request.tool_call.get("name") != "write_todos":
-            return await handler(request)
-        return ToolMessage(tool_call_id=request.tool_call.get("id", ""), content=_REDIRECT_PERMANENT)
+        try:
+            blocked = self._check_plan_block(request)
+            if blocked:
+                return blocked
+        except Exception:
+            pass
+        return await handler(request)
+
+    # ------------------------------------------------------------------
+    # State helpers — read from _RUN_REGISTRY via _RUN_CONTEXT
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _is_plan_mode() -> bool:
-        """Return True only when the current run (from _RUN_CONTEXT) has plan_mode=True."""
+        """True when plan_mode=True AND plan_approved=False (Plan Phase)."""
         try:
             from rai.harness.subagents.registry import _RUN_CONTEXT
             from rai.harness.runner import _RUN_REGISTRY
@@ -153,13 +200,14 @@ class PlanModeMiddleware(AgentMiddleware):
             ctx = _RUN_CONTEXT.get()
             if ctx is None:
                 return False
-            return bool(_RUN_REGISTRY.get(ctx["run_id"], {}).get("plan_mode"))
+            reg = _RUN_REGISTRY.get(ctx["run_id"], {})
+            return bool(reg.get("plan_mode")) and not bool(reg.get("plan_approved"))
         except Exception:
             return False
 
     @staticmethod
     def _is_plan_approved() -> bool:
-        """Return True when the current run has an approved plan (execution phase)."""
+        """True when plan is approved (Task Phase)."""
         try:
             from rai.harness.subagents.registry import _RUN_CONTEXT
             from rai.harness.runner import _RUN_REGISTRY
@@ -170,20 +218,6 @@ class PlanModeMiddleware(AgentMiddleware):
             return bool(_RUN_REGISTRY.get(ctx["run_id"], {}).get("plan_approved"))
         except Exception:
             return False
-
-    @staticmethod
-    def _get_all_plan_steps() -> list[dict]:
-        """Return all plan steps (pending or done)."""
-        try:
-            from rai.harness.subagents.registry import _RUN_CONTEXT
-            from rai.harness.runner import _RUN_REGISTRY
-
-            ctx = _RUN_CONTEXT.get()
-            if ctx is None:
-                return []
-            return list(_RUN_REGISTRY.get(ctx["run_id"], {}).get("plan_steps", []))
-        except Exception:
-            return []
 
     @staticmethod
     def _get_incomplete_steps() -> list[dict]:
@@ -199,18 +233,3 @@ class PlanModeMiddleware(AgentMiddleware):
             return [s for s in steps if s.get("status") not in ("done", "blocked")]
         except Exception:
             return []
-
-    @staticmethod
-    def _make_exec_steps_reminder(incomplete: list[dict]) -> str:
-        lines = ["⚑ Plan approved. Execute steps in order. Incomplete steps:"]
-        for s in incomplete:
-            label = s.get("title") or s.get("description", "—")
-            lines.append(f"  {s['number']}. {label}")
-        lines.append(
-            "Before starting each step call enter_step(step_number) to mark it in_progress "
-            "(it will show you the step description and 🔧 approach reminder), "
-            "then call mark_step_done(step_number) when complete. "
-            "If a step cannot proceed call mark_step_blocked(step_number, reason). "
-            "When ALL steps are done or blocked call exit_plan_mode() before ending the run."
-        )
-        return "\n".join(lines)

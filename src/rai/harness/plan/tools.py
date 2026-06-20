@@ -11,10 +11,113 @@ from __future__ import annotations
 import asyncio
 import json
 import re as _re
+from datetime import UTC, datetime
 from pathlib import Path as _Path
 from typing import Any
 
 from langchain_core.tools import tool
+from pydantic import BaseModel, field_validator
+
+# ---------------------------------------------------------------------------
+# Structured plan input schema
+# ---------------------------------------------------------------------------
+
+_VALID_PRIORITIES = ("critical", "high", "normal", "low")
+
+
+class PlanStep(BaseModel):
+    """Single plan step — validated at the tool boundary."""
+    title: str
+    description: str = ""
+    how_to: str = ""
+    depends_on: list[int] = []
+    priority: str = "normal"
+
+    @field_validator("title")
+    @classmethod
+    def title_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Step title cannot be empty")
+        return v
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, v: str) -> str:
+        if v not in _VALID_PRIORITIES:
+            raise ValueError(f"priority must be one of {_VALID_PRIORITIES}, got '{v}'")
+        return v
+
+
+def _validate_steps(steps: list[dict]) -> tuple[list[dict], str | None]:
+    """Validate structured step input. Returns (validated_steps, error_msg | None)."""
+    if not steps:
+        return [], "At least 1 step is required."
+    if len(steps) > 50:
+        return [], "Maximum 50 steps allowed."
+
+    validated: list[dict] = []
+    errors: list[str] = []
+
+    for i, raw in enumerate(steps, 1):
+        try:
+            step = PlanStep(**raw)
+        except Exception as e:
+            errors.append(f"Step {i}: {e}")
+            continue
+        validated.append({
+            "number": i,
+            "title": step.title,
+            "description": step.description,
+            "how_to": step.how_to,
+            "depends_on": step.depends_on,
+            "priority": step.priority,
+            "status": "pending",
+            "notes": "",
+            "reason": "",
+        })
+
+    if errors:
+        return [], "Step validation failed:\n" + "\n".join(errors)
+
+    # Validate depends_on references
+    valid_nums = {s["number"] for s in validated}
+    for s in validated:
+        for dep in s["depends_on"]:
+            if dep not in valid_nums:
+                return [], f"Step {s['number']} depends_on step {dep} which doesn't exist."
+
+    # Circular dependency check (topological sort)
+    dep_graph: dict[int, list[int]] = {s["number"]: s["depends_on"] for s in validated}
+    visited: set[int] = set()
+    in_stack: set[int] = set()
+
+    def _has_cycle(node: int) -> bool:
+        if node in in_stack:
+            return True
+        if node in visited:
+            return False
+        visited.add(node)
+        in_stack.add(node)
+        for dep in dep_graph.get(node, []):
+            if _has_cycle(dep):
+                return True
+        in_stack.discard(node)
+        return False
+
+    for num in valid_nums:
+        if _has_cycle(num):
+            return [], f"Circular dependency detected involving step {num}."
+
+    return validated, None
+
+
+def _apply_sequential_deps(steps: list[dict]) -> None:
+    """For steps with no explicit depends_on, inject depends_on=[N-1] (sequential mode)."""
+    for s in steps:
+        if not s["depends_on"] and s["number"] > 1:
+            s["depends_on"] = [s["number"] - 1]
+
 
 # ---------------------------------------------------------------------------
 # Harness redirect messages
@@ -29,18 +132,25 @@ You must follow the full plan harness in order:
   2. ask_user()                     — STRICTLY required: gather goals, scope, constraints,
                                       and expected outcomes from the user before planning
   3. (use read-only tools to research the task)
-  4. write_plan(content)            — submit a detailed numbered step-by-step plan for approval
+  4. write_plan(title, description, steps)
+     — submit structured steps for approval (each step: {title, description, how_to, depends_on, priority})
   5. (execution pauses — wait for the user to approve or reject)
-  6. enter_step(N)                  — mark the step in_progress before starting work
+  6. enter_step(N)                  — mark step in_progress (blocked if depends_on unmet)
   7. (perform the step's work)
   8. mark_step_done(N, notes=...)   — record completion; use notes for key findings
      OR mark_step_blocked(N, reason) if the step cannot proceed
   9. Repeat steps 6–8 for every numbered step in the plan
- 10. exit_plan_mode()               — gate-check all steps, write self-learning memories,
-                                      then summarise and end
+ 10. exit_plan_mode()               — gate-check all steps, write self-learning memories
 
-Call enter_plan_mode() now to begin. Then immediately use ask_user() to understand
-what the user wants before you start any research or planning.
+ENFORCED RULES (harness will REJECT violations):
+  • write_plan() requires structured steps — title is mandatory for each
+  • Steps with depends_on CANNOT be entered until dependencies are done
+  • Plans MUST be approved before execution — rejected plans require revision
+  • sequential=True (default) means Step N requires Step N-1 to be done
+  • Scope changes → call add_steps(), do NOT exit plan mode
+  • Critical findings → call escalate_step() to prioritize follow-up
+
+Call enter_plan_mode() now to begin.
 </plan-required>"""
 
 _PLAN_MODE_REDIRECT = """\
@@ -53,8 +163,9 @@ Use ask_user() strictly to interact with the user — ask clarifying questions a
   • Expected outcomes for each phase
   • Constraints, exclusions, or priorities
 
-Once you have a clear picture of what they want, call write_plan(content) with a
-detailed numbered step-by-step plan. Execution will begin only after approval.
+Once you have a clear picture of what they want, call write_plan(title=...,
+description=..., steps=[...]) with structured step definitions.
+Execution will begin only after approval.
 </plan-required>"""
 
 _PLAN_APPROVED_REDIRECT = """\
@@ -289,39 +400,66 @@ def _get_step(steps: list[dict], n: int) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Plan state persistence (keyed by run_id — NOT thread_id)
+# Plan state persistence (keyed by thread_id — survives across runs)
 # ---------------------------------------------------------------------------
 
-def _plan_state_path(run_id: str) -> _Path:
-    return _Path.home() / ".rai" / "plans" / f"{run_id[:16]}.json"
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
 
 
-def _persist_plan(run_id: str, reg: dict) -> None:
-    """Write plan registry state to disk so it survives server restarts."""
+def _map_status(reg: dict) -> str:
+    """Derive human-readable plan status from registry state."""
+    if reg.get("plan_approved"):
+        steps = reg.get("plan_steps", [])
+        incomplete = [s for s in steps if s.get("status") not in ("done", "blocked")]
+        return "completed" if not incomplete else "executing"
+    if reg.get("plan_mode"):
+        return "planning"
+    return "unknown"
+
+
+def _plan_state_path(thread_id: str) -> _Path:
+    """Plan state persisted per thread (session), not per run."""
+    return _Path.home() / ".rai" / "plans" / f"{thread_id}.json"
+
+
+def _persist_plan(thread_id: str, reg: dict) -> None:
+    """Write plan state to ~/.rai/plans/{thread_id}.json — survives restarts."""
     try:
-        _plan_state_path(run_id).parent.mkdir(parents=True, exist_ok=True)
+        path = _plan_state_path(thread_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        existing: dict = {}
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text())
+            except Exception:
+                pass
+
         payload = {
-            "run_id": run_id,
-            "plan_data": reg.get("plan_data", {}),
-            "plan_steps": reg.get("plan_steps", []),
-            "plan": reg.get("plan", ""),
+            "thread_id": thread_id,
+            "run_id": reg.get("run_id", ""),
+            "created_at": existing.get("created_at") or _now_iso(),
+            "updated_at": _now_iso(),
+            "status": _map_status(reg),
+            "title": reg.get("plan_data", {}).get("title", "Plan"),
+            "description": reg.get("plan_data", {}).get("description", ""),
+            "plan_raw": reg.get("plan", ""),
             "plan_file": reg.get("plan_file", ""),
-            "status": reg.get("status", ""),
-            "plan_mode": reg.get("plan_mode", False),
-            "plan_approved": reg.get("plan_approved", False),
+            "steps": reg.get("plan_steps", []),
         }
-        _plan_state_path(run_id).write_text(json.dumps(payload, indent=2))
+        path.write_text(json.dumps(payload, indent=2))
     except Exception:
         pass
 
 
-def _restore_plan(run_id: str) -> dict | None:
-    """Load persisted plan state for run_id; return None if not found or mismatched."""
+def _restore_plan(thread_id: str) -> dict | None:
+    """Load persisted plan state for thread; None if not found."""
     try:
-        p = _plan_state_path(run_id)
+        p = _plan_state_path(thread_id)
         if p.exists():
             data = json.loads(p.read_text())
-            if data.get("run_id") == run_id:
+            if data.get("thread_id") == thread_id:
                 return data
     except Exception:
         pass
@@ -351,6 +489,25 @@ def _exec_gate(reg: dict) -> str | None:
     return _HARNESS_GUIDE
 
 
+def _task_phase_gate(reg: dict) -> str | None:
+    """Gate for task-phase-only tools (enter_step, mark_step_done, etc.).
+
+    Returns None if allowed, or a redirect message if not in task phase.
+    """
+    if reg.get("plan_approved"):
+        return None
+    if reg.get("plan_mode"):
+        return (
+            "<plan-harness-restricted>\n"
+            "REJECTED: This tool is only available during Task Phase (after plan approval).\n"
+            "CURRENT PHASE: Plan (research only).\n"
+            "ACTION: Complete your research, then call write_plan(title, description, steps) "
+            "to submit a structured plan. This tool becomes available after user approval.\n"
+            "</plan-harness-restricted>"
+        )
+    return _HARNESS_GUIDE
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -371,82 +528,116 @@ async def enter_plan_mode() -> str:
     """
     ctx = _get_run_context()
     run_id = ctx["run_id"]
+    thread_id = ctx["thread_id"]
     bus = ctx["parent_bus"]
 
     import rai.harness.runner as _runner
 
-    # Check if a plan was already approved for this run_id (disk restore)
-    saved = _restore_plan(run_id)
-    if saved and saved.get("plan_approved") and saved.get("status") in ("running",):
-        _runner._RUN_REGISTRY.setdefault(run_id, {}).update({
-            "plan_mode":    False,
-            "plan_approved": True,
-            "plan_data":    saved.get("plan_data", {}),
-            "plan_steps":   saved.get("plan_steps", []),
-            "plan":         saved.get("plan", ""),
-            "plan_file":    saved.get("plan_file", ""),
-            "status":       "running",
-        })
-        return (
-            "Plan state restored from disk — your approved plan is already active.\n"
-            "Call list_plan_steps() to see current status and continue execution."
-        )
+    # Check for existing plan on this thread (persisted across runs)
+    saved = _restore_plan(thread_id)
+    if saved and saved.get("status") not in ("completed",):
+        incomplete = [s for s in saved.get("steps", []) if s.get("status") not in ("done", "blocked")]
+        if incomplete:
+            _runner._RUN_REGISTRY.setdefault(run_id, {}).update({
+                "plan_mode":    False,
+                "plan_approved": True,
+                "plan_data":    {"title": saved.get("title", "Plan"), "description": saved.get("description", "")},
+                "plan_steps":   saved.get("steps", []),
+                "plan":         saved.get("plan_raw", ""),
+                "plan_file":    saved.get("plan_file", ""),
+                "status":       "running",
+                "run_id":       run_id,
+            })
+            _persist_plan(thread_id, _runner._RUN_REGISTRY[run_id])
+            done_count = len(saved["steps"]) - len(incomplete)
+            inc_list = "\n".join(
+                f"  {s['number']}. {s.get('title') or s.get('description', '—')}"
+                for s in incomplete
+            )
+            return (
+                "<plan-info>\n"
+                f"Plan restored: '{saved.get('title', 'Plan')}' ({done_count} done, {len(incomplete)} remaining)\n"
+                f"Incomplete:\n{inc_list}\n\n"
+                f"Next: enter_step({incomplete[0]['number']})\n"
+                "</plan-info>"
+            )
 
     if run_id in _runner._RUN_REGISTRY:
-        _runner._RUN_REGISTRY[run_id]["plan_mode"] = True
-        _runner._RUN_REGISTRY[run_id]["plan_approved"] = False
-        _runner._RUN_REGISTRY[run_id]["status"] = "planning"
+        _runner._RUN_REGISTRY[run_id].update({
+            "plan_mode":     True,
+            "plan_approved": False,
+            "plan_steps":    [],
+            "plan_data":     {},
+            "plan":          "",
+            "plan_file":     "",
+            "status":        "planning",
+            "run_id":        run_id,
+        })
+        _persist_plan(thread_id, _runner._RUN_REGISTRY[run_id])
 
     await bus.publish("plan_mode_entered", {"run_id": run_id})
     return (
-        "Plan mode active.\n\n"
-        "STEP 1 — Gather requirements: use ask_user() STRICTLY to ask the user:\n"
-        "  • What is the exact goal or target?\n"
-        "  • What outcomes do they expect from each phase?\n"
-        "  • Any constraints, exclusions, priorities, or preferred approach?\n"
-        "Keep asking until you have a clear, detailed picture of what they want.\n\n"
-        "STEP 2 — Research: use ONLY read-only tools (Read, Glob, Grep, WebSearch,\n"
-        "  WebFetch, GET requests). Do NOT write files, execute code, or make mutating calls.\n\n"
-        "STEP 3 — Plan: call write_plan(content). Each step MUST use this three-line format:\n\n"
-        "  N. **Title** — short action name (3-7 words)\n"
-        "     Description: What this step accomplishes and why it is needed.\n"
-        "     How to do it: Specific tools, commands, approach; expected output.\n\n"
-        "Example:\n"
-        "  1. **Enumerate API Endpoints**\n"
-        "     Description: Map all exposed routes using the OpenAPI spec and live probing.\n"
-        "     How to do it: Load spec with load_openapi_spec, verify with GET requests,\n"
-        "       use gobuster for undocumented routes. Expected: full endpoint list.\n\n"
-        "Execution begins only after the user approves the plan."
+        "<plan-info>\n"
+        "Plan mode active. Workflow:\n"
+        "1. ask_user() — gather goals, scope, constraints\n"
+        "2. Research with read-only tools (Read, Grep, WebSearch, GET)\n"
+        "3. write_plan(title=..., description=..., steps=[...]) — structured steps:\n"
+        "   {\"title\": \"...\", \"description\": \"...\", \"how_to\": \"...\", \"depends_on\": [], \"priority\": \"normal\"}\n"
+        "   sequential=True (default) auto-enforces linear ordering.\n"
+        "Execution begins only after user approves.\n"
+        "</plan-info>"
     )
 
 
 @tool
-async def write_plan(content: str, slug: str = "") -> str:
-    """Submit your research as a structured plan for user approval before executing.
+async def write_plan(
+    title: str = "",
+    description: str = "",
+    steps: list[dict] | None = None,
+    sequential: bool = True,
+    slug: str = "",
+    content: str = "",
+) -> str:
+    """Submit a structured plan for user approval before executing.
 
     Call this AFTER using ask_user() to gather requirements and exploring with
     read-only tools. Execution pauses until the user approves or rejects.
 
-    Each step MUST use this three-line format:
+    PREFERRED: Pass structured steps (validated by the harness — malformed plans
+    are impossible):
 
-      N. **Title** — short action name (3-7 words)
-         Description: What this step accomplishes and why it is needed.
-         How to do it: Specific tools, commands, approach; expected output.
+        write_plan(
+            title="API Security Assessment",
+            description="Full OWASP Top 10 assessment of the target API",
+            steps=[
+                {"title": "Enumerate Endpoints", "description": "Map all routes", "how_to": "Load OpenAPI spec + gobuster"},
+                {"title": "Test Authentication", "description": "Verify auth bypass", "depends_on": [1]},
+                {"title": "Check Injection", "priority": "critical", "depends_on": [1]},
+            ],
+            sequential=True,  # auto-adds depends_on=[N-1] when not explicit
+        )
 
-    Example:
-      1. **Enumerate API Endpoints**
-         Description: Map all exposed routes using the OpenAPI spec and live probing.
-         How to do it: Load spec with load_openapi_spec, verify with GET requests,
-           use gobuster for undocumented routes. Expected: full endpoint list.
+    Step schema (title is required, rest optional):
+        title:       str  — short action name (3-7 words)
+        description: str  — what this step accomplishes
+        how_to:      str  — tools, commands, approach
+        depends_on:  list[int]  — step numbers that must complete first
+        priority:    str  — "critical" | "high" | "normal" | "low"
+
+    FALLBACK: Pass content= with markdown (legacy — parsed with regex, may fail).
 
     Args:
-        content: Full plan in markdown. Must reflect what the user told you via
-                 ask_user(). Start with a title (# heading) and a brief description
-                 of the overall goal, then numbered steps in the format above.
-        slug: Short name for the plan file, e.g. "recon-phase-1". Defaults to run_id.
+        title: Plan title (e.g. "Recon Phase 1").
+        description: Brief description of the overall goal.
+        steps: List of step dicts. Each must have at least a 'title' field.
+        sequential: If True (default), steps without explicit depends_on auto-get
+                    depends_on=[N-1], enforcing linear execution.
+        slug: Short name for the plan file. Defaults to run_id prefix.
+        content: Legacy markdown fallback. Ignored if steps is provided.
     """
     ctx = _get_run_context()
     run_id = ctx["run_id"]
+    thread_id = ctx["thread_id"]
     bus = ctx["parent_bus"]
 
     import rai.harness.runner as _runner
@@ -458,38 +649,81 @@ async def write_plan(content: str, slug: str = "") -> str:
     if not reg.get("plan_mode"):
         return _HARNESS_GUIDE
 
-    # Parse into structured data
-    plan_meta, steps = _parse_plan(content)
-    if not steps:
+    # Track rejection count
+    reject_count = reg.get("_reject_count", 0)
+    if reject_count >= 5:
+        _runner._RUN_REGISTRY[run_id]["status"] = "failed"
         return (
             "<plan-error>\n"
-            "No steps were parsed from your plan. Ensure each step is on its own line "
-            "using a numbered list format:\n\n"
-            "  1. First step description\n"
-            "  2. Second step description\n\n"
-            "Revise and call write_plan() again.\n"
+            "Plan rejected 5 times. Run aborted — the user's requirements cannot be met "
+            "with the current approach. End the conversation and ask them to start fresh.\n"
             "</plan-error>"
         )
 
-    plan_meta["total_steps"] = len(steps)
+    # --- Structured input path (preferred) ---
+    if steps is not None:
+        validated, error = _validate_steps(steps)
+        if error:
+            return (
+                f"<plan-error>\n{error}\n\n"
+                "Fix the step definitions and call write_plan() again.\n"
+                "Each step needs at minimum: {\"title\": \"...\"}\n"
+                "</plan-error>"
+            )
+        if sequential:
+            _apply_sequential_deps(validated)
+        plan_meta = {
+            "title": title or "Plan",
+            "description": description,
+            "total_steps": len(validated),
+        }
+        plan_steps = validated
+        raw_content = _canonical_plan_md(plan_meta, plan_steps)
 
-    # Save raw markdown plan file
+    # --- Legacy markdown fallback ---
+    elif content:
+        plan_meta, plan_steps = _parse_plan(content)
+        if not plan_steps:
+            return (
+                "<plan-error>\n"
+                "No steps were parsed from your plan. Use STRUCTURED input instead:\n\n"
+                "  write_plan(\n"
+                "    title=\"...\",\n"
+                "    description=\"...\",\n"
+                "    steps=[{\"title\": \"Step 1\"}, {\"title\": \"Step 2\"}]\n"
+                "  )\n\n"
+                "Each step needs at minimum a 'title' field.\n"
+                "</plan-error>"
+            )
+        plan_meta["total_steps"] = len(plan_steps)
+        raw_content = content
+    else:
+        return (
+            "<plan-error>\n"
+            "No plan provided. You must pass either:\n"
+            "  • steps=[{\"title\": \"...\", ...}, ...] — structured (preferred)\n"
+            "  • content=\"...\" — legacy markdown fallback\n\n"
+            "Use structured steps for reliable plan creation.\n"
+            "</plan-error>"
+        )
+
+    # Save plan file
     plans_dir = _Path.home() / ".rai" / "plans"
     plans_dir.mkdir(parents=True, exist_ok=True)
     plan_file = plans_dir / f"{slug or run_id[:12]}.md"
-    plan_file.write_text(content)
+    plan_file.write_text(raw_content)
 
     agent_name = reg.get("agent_name", "")
     _runner._RUN_REGISTRY[run_id].update({
-        "plan":       content,
+        "plan":       raw_content,
         "plan_data":  plan_meta,
-        "plan_steps": steps,
+        "plan_steps": plan_steps,
         "plan_file":  str(plan_file),
         "status":     "plan_ready",
     })
 
     # Render canonical formatted markdown for TUI display
-    canonical_md = _canonical_plan_md(plan_meta, steps)
+    canonical_md = _canonical_plan_md(plan_meta, plan_steps)
 
     fut: asyncio.Future = asyncio.get_running_loop().create_future()
     _runner._PLAN_FUTURES[run_id] = fut
@@ -503,10 +737,25 @@ async def write_plan(content: str, slug: str = "") -> str:
     })
 
     try:
-        decision = await asyncio.wait_for(fut, timeout=3600.0)
+        decision = await asyncio.wait_for(fut, timeout=18000.0)
     except asyncio.TimeoutError:
-        _runner._RUN_REGISTRY[run_id]["status"] = "failed"
-        return "Plan approval timed out after 1 hour."
+        _runner._RUN_REGISTRY[run_id].update({
+            "status": "running",
+            "plan_mode": False,
+            "plan_approved": False,
+            "plan_steps": [],
+            "plan_data": {},
+            "plan": "",
+            "plan_file": "",
+        })
+        _persist_plan(thread_id, _runner._RUN_REGISTRY[run_id])
+        await bus.publish("plan_timeout", {"run_id": run_id})
+        return (
+            "<system-info>\n"
+            "Plan approval timed out. Plan mode exited — all tools restored.\n"
+            "Continue working in normal mode or call enter_plan_mode() to retry.\n"
+            "</system-info>"
+        )
     finally:
         _runner._PLAN_FUTURES.pop(run_id, None)
 
@@ -514,17 +763,18 @@ async def write_plan(content: str, slug: str = "") -> str:
         if edited_content:
             new_meta, new_steps = _parse_plan(edited_content)
             new_meta["total_steps"] = len(new_steps)
-            _runner._RUN_REGISTRY[run_id].update({
-                "plan":       edited_content,
-                "plan_data":  new_meta,
-                "plan_steps": new_steps,
-            })
+            if new_steps:
+                _runner._RUN_REGISTRY[run_id].update({
+                    "plan":       edited_content,
+                    "plan_data":  new_meta,
+                    "plan_steps": new_steps,
+                })
         _runner._RUN_REGISTRY[run_id].update({
             "status":       "running",
             "plan_mode":    False,
             "plan_approved": True,
         })
-        _persist_plan(run_id, _runner._RUN_REGISTRY[run_id])
+        _persist_plan(thread_id, _runner._RUN_REGISTRY[run_id])
 
     _EXEC_REMINDER = (
         "For each step: enter_step(N) → do the work → mark_step_done(N, notes=...).\n"
@@ -546,7 +796,7 @@ async def write_plan(content: str, slug: str = "") -> str:
         )
 
     if decision["action"] == "edit":
-        edited = decision.get("feedback") or content
+        edited = decision.get("feedback") or raw_content
         _apply_approval(edited)
         await bus.publish("plan_approved", {"run_id": run_id})
         new_steps = _runner._RUN_REGISTRY[run_id]["plan_steps"]
@@ -563,20 +813,106 @@ async def write_plan(content: str, slug: str = "") -> str:
     if decision["action"] == "respond":
         guidance = decision.get("feedback") or "No guidance provided."
         _runner._RUN_REGISTRY[run_id]["status"] = "planning"
+        _runner._RUN_REGISTRY[run_id]["_reject_count"] = reject_count + 1
         await bus.publish("plan_rejected", {"run_id": run_id, "feedback": guidance})
         return (
-            f"User provided plan guidance:\n\n{guidance}\n\n"
-            "Incorporate this guidance to write an improved plan. "
-            "Call write_plan() again with the updated plan."
+            "<plan-rejected>\n"
+            f"User feedback: {guidance}\n\n"
+            "Incorporate this feedback and call write_plan() again with revised steps.\n"
+            f"Attempts remaining: {4 - reject_count}\n"
+            "</plan-rejected>"
         )
 
+    # Explicit reject
     feedback = decision.get("feedback") or "No feedback provided."
     _runner._RUN_REGISTRY[run_id]["status"] = "planning"
+    _runner._RUN_REGISTRY[run_id]["_reject_count"] = reject_count + 1
     await bus.publish("plan_rejected", {"run_id": run_id, "feedback": feedback})
     return (
-        f"Plan rejected. User feedback: {feedback}\n\n"
-        "Revise your plan and call write_plan() again."
+        "<plan-rejected>\n"
+        f"Plan rejected. Feedback: {feedback}\n\n"
+        "Revise your plan and call write_plan() again.\n"
+        f"Attempts remaining: {4 - reject_count}\n"
+        "</plan-rejected>"
     )
+
+
+@tool
+async def read_plan() -> str:
+    """Load the current plan for this session/thread.
+
+    Returns the plan with status of each step. Use this to resume work on a
+    previously started plan or check progress. The plan file is automatically
+    resolved from the current thread/session — no filepath needed.
+    """
+    ctx = _get_run_context()
+    thread_id = ctx["thread_id"]
+    run_id = ctx["run_id"]
+
+    saved = _restore_plan(thread_id)
+    if not saved:
+        return (
+            "<plan-info>\n"
+            "No plan exists for this session.\n"
+            "Call enter_plan_mode() to start planning.\n"
+            "</plan-info>"
+        )
+
+    # Restore into _RUN_REGISTRY if not already loaded
+    import rai.harness.runner as _runner
+    reg = _runner._RUN_REGISTRY.get(run_id, {})
+    if not reg.get("plan_steps") and saved.get("status") != "completed":
+        _runner._RUN_REGISTRY.setdefault(run_id, {}).update({
+            "plan_data":    {"title": saved.get("title", "Plan"), "description": saved.get("description", "")},
+            "plan_steps":   saved.get("steps", []),
+            "plan":         saved.get("plan_raw", ""),
+            "plan_file":    saved.get("plan_file", ""),
+            "plan_mode":    saved["status"] == "planning",
+            "plan_approved": saved["status"] in ("executing",),
+            "run_id":       run_id,
+        })
+
+    steps = saved.get("steps", [])
+    done = [s for s in steps if s.get("status") == "done"]
+    blocked = [s for s in steps if s.get("status") == "blocked"]
+    incomplete = [s for s in steps if s.get("status") not in ("done", "blocked")]
+
+    lines = [
+        "<plan-status>",
+        f"Plan: {saved.get('title', 'Plan')}",
+        f"Status: {saved['status']} | {len(done)} done, {len(blocked)} blocked, {len(incomplete)} remaining",
+        "",
+    ]
+
+    # Done/blocked steps: compact (title only — agent doesn't need details for completed work)
+    for s in steps:
+        status = s.get("status", "pending")
+        title = s.get("title") or s.get("description", "—")
+        if status == "done":
+            lines.append(f"  {s['number']}. [x] {title}")
+        elif status == "blocked":
+            reason = s.get("reason", "")
+            lines.append(f"  {s['number']}. [!] {title}" + (f" — {reason[:60]}" if reason else ""))
+        elif status == "in_progress":
+            lines.append(f"  {s['number']}. [>] {title}")
+            if s.get("how_to"):
+                lines.append(f"       How to: {s['how_to']}")
+        else:
+            # Pending: show full detail so agent knows what to do
+            lines.append(f"  {s['number']}. [ ] {title}")
+            if s.get("description") and s.get("description") != title:
+                lines.append(f"       {s['description']}")
+            if s.get("how_to"):
+                lines.append(f"       How to: {s['how_to']}")
+
+    lines.append("")
+    if not incomplete:
+        lines.append("All steps resolved. Call exit_plan_mode() to finalize.")
+    else:
+        next_step = incomplete[0]["number"]
+        lines.append(f"Next: enter_step({next_step}) → do work → mark_step_done({next_step})")
+    lines.append("</plan-status>")
+    return "\n".join(lines)
 
 
 @tool
@@ -591,9 +927,6 @@ async def list_plan_steps() -> str:
     run_id = ctx["run_id"]
     import rai.harness.runner as _runner
     reg = _runner._RUN_REGISTRY.get(run_id) or {}
-    redirect = _exec_gate(reg)
-    if redirect:
-        return redirect
     steps = reg.get("plan_steps", [])
     if not steps:
         return json.dumps({"error": "No plan steps found. Call enter_plan_mode() and write_plan() first."})
@@ -604,6 +937,8 @@ async def list_plan_steps() -> str:
     # Compact done/blocked steps — strip description/how_to/full-notes to save tokens.
     # Pending and in_progress steps are returned in full so the agent has complete detail.
     # notes are summarised to 150 chars for done steps (full notes in mark_step_done ToolMessages).
+    _PRIORITY_ORDER = {"critical": 0, "high": 1, "normal": 2, "low": 3}
+
     def _compact_step(s: dict) -> dict:
         status = s.get("status", "")
         if status in ("done", "blocked"):
@@ -616,7 +951,19 @@ async def list_plan_steps() -> str:
                 "notes":  (notes[:150] + "…") if len(notes) > 150 else notes,
                 "reason": (reason[:150] + "…") if len(reason) > 150 else reason,
             }
-        return s  # pending/in_progress: full detail
+        # pending/in_progress: full detail (includes priority if set)
+        return dict(s)
+
+    # Sort pending/in_progress by priority (critical first) for clear next-action
+    def _sort_key(s: dict) -> tuple:
+        status_order = {"in_progress": 0, "pending": 1, "done": 2, "blocked": 3}
+        return (
+            status_order.get(s.get("status", "pending"), 1),
+            _PRIORITY_ORDER.get(s.get("priority", "normal"), 2),
+            s["number"],
+        )
+
+    sorted_steps = sorted(steps, key=_sort_key)
 
     return json.dumps({
         "plan_title":  plan_data.get("title", "Plan"),
@@ -625,7 +972,7 @@ async def list_plan_steps() -> str:
         "blocked":     by_status.get("blocked", 0),
         "in_progress": by_status.get("in_progress", 0),
         "pending":     by_status.get("pending", 0),
-        "steps":       [_compact_step(s) for s in steps],
+        "steps":       [_compact_step(s) for s in sorted_steps],
     }, indent=2)
 
 
@@ -641,10 +988,11 @@ async def enter_step(step_number: int) -> str:
     """
     ctx = _get_run_context()
     run_id = ctx["run_id"]
+    thread_id = ctx["thread_id"]
     bus = ctx["parent_bus"]
     import rai.harness.runner as _runner
     reg = _runner._RUN_REGISTRY.get(run_id) or {}
-    redirect = _exec_gate(reg)
+    redirect = _task_phase_gate(reg)
     if redirect:
         return redirect
 
@@ -674,8 +1022,37 @@ async def enter_step(step_number: int) -> str:
             f"mark_step_blocked({step_number}, reason)."
         )
 
+    # --- Phase gating: enforce depends_on ---
+    deps = step.get("depends_on", [])
+    if deps:
+        unmet = []
+        for dep_num in deps:
+            dep_step = _get_step(steps, dep_num)
+            if dep_step is None:
+                continue  # dangling dep ref — treat as satisfied (step was removed/renumbered)
+            if dep_step["status"] not in ("done", "blocked"):
+                unmet.append(dep_step)
+        if unmet:
+            unmet_lines = [
+                f"  • Step {s['number']}: {s.get('title', '—')} [{s['status']}]"
+                for s in unmet
+            ]
+            return (
+                f"<step-gated>\n"
+                f"Cannot enter Step {step_number} — dependencies not met:\n"
+                + "\n".join(unmet_lines) + "\n\n"
+                "Complete these steps first, then retry.\n"
+                "Call list_plan_steps() to see current status.\n"
+                "</step-gated>"
+            )
+
     step["status"] = "in_progress"
-    _persist_plan(run_id, reg)
+    step["started_at"] = _now_iso()
+    # Track current active steps for finding linkage (parallel support)
+    current_steps: list[int] = reg.setdefault("current_steps", [])
+    if step_number not in current_steps:
+        current_steps.append(step_number)
+    _persist_plan(thread_id, reg)
     label = step.get("title") or step.get("description", "—")
     await bus.publish("step_start", {
         "run_id":      run_id,
@@ -704,10 +1081,11 @@ async def mark_step_done(step_number: int, notes: str = "") -> str:
     """
     ctx = _get_run_context()
     run_id = ctx["run_id"]
+    thread_id = ctx["thread_id"]
     bus = ctx["parent_bus"]
     import rai.harness.runner as _runner
     reg = _runner._RUN_REGISTRY.get(run_id) or {}
-    redirect = _exec_gate(reg)
+    redirect = _task_phase_gate(reg)
     if redirect:
         return redirect
 
@@ -733,16 +1111,20 @@ async def mark_step_done(step_number: int, notes: str = "") -> str:
 
     warning = ""
     if step["status"] == "pending":
-        # Auto-advance: pending → in_progress → done (warn agent to use enter_step next time)
         warning = (
             f"Note: enter_step({step_number}) was not called before marking done. "
             "Call enter_step(N) before starting each step to keep step tracking accurate.\n"
         )
 
     step["status"] = "done"
+    step["completed_at"] = _now_iso()
     if notes:
         step["notes"] = notes
-    _persist_plan(run_id, reg)
+    # Remove from active step tracking
+    current_steps: list[int] = reg.get("current_steps", [])
+    if step_number in current_steps:
+        current_steps.remove(step_number)
+    _persist_plan(thread_id, reg)
 
     label = step.get("title") or step.get("description", "—")
     await bus.publish("step_complete", {
@@ -774,10 +1156,11 @@ async def mark_step_blocked(step_number: int, reason: str = "") -> str:
     """
     ctx = _get_run_context()
     run_id = ctx["run_id"]
+    thread_id = ctx["thread_id"]
     bus = ctx["parent_bus"]
     import rai.harness.runner as _runner
     reg = _runner._RUN_REGISTRY.get(run_id) or {}
-    redirect = _exec_gate(reg)
+    redirect = _task_phase_gate(reg)
     if redirect:
         return redirect
 
@@ -795,7 +1178,11 @@ async def mark_step_blocked(step_number: int, reason: str = "") -> str:
     step["status"] = "blocked"
     if reason:
         step["reason"] = reason
-    _persist_plan(run_id, reg)
+    # Remove from active step tracking
+    current_steps: list[int] = reg.get("current_steps", [])
+    if step_number in current_steps:
+        current_steps.remove(step_number)
+    _persist_plan(thread_id, reg)
 
     label = step.get("title") or step.get("description", "—")
     await bus.publish("step_blocked", {
@@ -816,60 +1203,96 @@ async def mark_step_blocked(step_number: int, reason: str = "") -> str:
 
 @tool
 async def exit_plan_mode() -> str:
-    """Signal that plan execution is complete and request to end the run.
+    """Exit plan mode. Always callable — serves as escape hatch from Plan Phase.
 
-    Hard gate: checks all plan steps before allowing exit.
-    - Not in approved plan → <plan-required> harness guide.
-    - Steps still pending/in_progress → <plan-reminder> listing incomplete steps.
-    - All steps done or blocked → deletes plan file, emits plan_completed SSE,
-      returns the self-learning memory prompt so the agent consolidates knowledge.
+    Behavior depends on current phase:
+    - Plan Phase (not approved): Clean exit, all tools restored (escape hatch).
+    - Task Phase (approved): Gate-checks all steps before allowing exit.
+    - Normal mode: No-op.
 
-    Always call this when you believe execution is complete.
+    Always call this when you believe execution is complete or want to exit planning.
     """
     ctx = _get_run_context()
     run_id = ctx["run_id"]
+    thread_id = ctx["thread_id"]
     bus = ctx["parent_bus"]
     import rai.harness.runner as _runner
 
     reg = _runner._RUN_REGISTRY.get(run_id) or {}
-    redirect = _exec_gate(reg)
-    if redirect:
-        return redirect
 
+    # Case 1: Plan Phase (not approved) — escape hatch, clean exit
+    if reg.get("plan_mode") and not reg.get("plan_approved"):
+        _runner._RUN_REGISTRY[run_id].update({
+            "status": "running",
+            "plan_mode": False,
+            "plan_approved": False,
+            "plan_steps": [],
+            "plan_data": {},
+            "plan": "",
+            "plan_file": "",
+        })
+        _persist_plan(thread_id, _runner._RUN_REGISTRY[run_id])
+        await bus.publish("plan_exited", {"run_id": run_id, "reason": "escape"})
+        return (
+            "<system-info>\n"
+            "Plan mode exited. All tools restored — operating in normal mode.\n"
+            "You may continue working freely or call enter_plan_mode() to restart planning.\n"
+            "</system-info>"
+        )
+
+    # Case 3: Normal mode — no-op
+    if not reg.get("plan_approved"):
+        return "<system-info>\nNot in plan mode. No action needed.\n</system-info>"
+
+    # Case 2: Task Phase (approved) — enforce completion gate
     steps = reg.get("plan_steps", [])
     incomplete = [s for s in steps if s["status"] not in ("done", "blocked")]
 
     if incomplete:
         lines = [
-            "<plan-reminder>",
-            f"{len(incomplete)} of {len(steps)} steps still unresolved — you CANNOT exit yet:",
+            "<task-harness-enforce>",
+            f"EXIT DENIED: {len(incomplete)} of {len(steps)} steps still unresolved.",
+            "ENFORCEMENT: You CANNOT exit until all steps are completed or blocked.",
+            "PENDING STEPS:",
         ]
         for s in incomplete:
             label = s.get("title") or s.get("description", "—")
             lines.append(f"  {s['number']}. [{s['status']}] {label}")
         lines += [
             "",
-            "For each: enter_step(N) → do the work → mark_step_done(N, notes=...).",
-            "Or mark_step_blocked(N, reason) if a step cannot proceed.",
+            "ACTION REQUIRED: For each pending step:",
+            "  enter_step(N) → execute the work → mark_step_done(N, notes=...)",
+            "  OR mark_step_blocked(N, reason=...) if it cannot proceed.",
             "Then call exit_plan_mode() again.",
-            "</plan-reminder>",
+            "</task-harness-enforce>",
         ]
         return "\n".join(lines)
 
-    _runner._RUN_REGISTRY[run_id]["status"] = "completed"
     plan_data = reg.get("plan_data", {})
     plan_file = reg.get("plan_file", "")
+
+    # Fully clear plan state so a new plan can start on the same run/thread
+    _runner._RUN_REGISTRY[run_id].update({
+        "status":        "completed",
+        "plan_mode":     False,
+        "plan_approved": False,
+        "plan_steps":    [],
+        "plan_data":     {},
+        "plan":          "",
+        "plan_file":     "",
+    })
     total_steps = len(steps)
 
+    # Delete the raw .md plan file (not needed after completion)
     if plan_file:
         try:
             _Path(plan_file).unlink(missing_ok=True)
         except OSError:
             pass
 
-    # Clean up persisted state file now that the plan is done
+    # Clear plan state file — allows next plan on same thread to start fresh
     try:
-        _plan_state_path(run_id).unlink(missing_ok=True)
+        _plan_state_path(thread_id).write_text("{}")
     except Exception:
         pass
 
@@ -909,14 +1332,178 @@ async def exit_plan_mode() -> str:
     )
 
 
+@tool
+async def escalate_step(step_number: int, priority: str = "critical", reason: str = "") -> str:
+    """Escalate a pending step's priority. Critical steps should be executed next.
+
+    Call this when a finding in the current step reveals that a later step is
+    more urgent than originally planned (e.g. critical SQLi found → escalate
+    the "Test Injection" step).
+
+    Args:
+        step_number: 1-based step number to escalate.
+        priority: New priority — "critical", "high", "normal", or "low".
+        reason: Why the step is being escalated (e.g. "Critical SQLi found in auth endpoint").
+    """
+    if priority not in _VALID_PRIORITIES:
+        return f"Invalid priority '{priority}'. Must be one of: {_VALID_PRIORITIES}"
+
+    ctx = _get_run_context()
+    run_id = ctx["run_id"]
+    thread_id = ctx["thread_id"]
+    bus = ctx["parent_bus"]
+    import rai.harness.runner as _runner
+    reg = _runner._RUN_REGISTRY.get(run_id) or {}
+    redirect = _task_phase_gate(reg)
+    if redirect:
+        return redirect
+
+    steps = reg.get("plan_steps", [])
+    step = _get_step(steps, step_number)
+
+    if step is None:
+        valid = [s["number"] for s in steps]
+        return f"Step {step_number} not found. Valid step numbers: {valid}."
+    if step["status"] in ("done", "blocked"):
+        return f"Step {step_number} is already {step['status']} — cannot escalate."
+
+    old_priority = step.get("priority", "normal")
+    step["priority"] = priority
+    _persist_plan(thread_id, reg)
+
+    label = step.get("title") or step.get("description", "—")
+    await bus.publish("step_escalated", {
+        "run_id": run_id,
+        "step_number": step_number,
+        "priority": priority,
+        "old_priority": old_priority,
+        "reason": reason,
+    })
+    return (
+        f"Step {step_number} ({label}) escalated: {old_priority} → {priority}.\n"
+        + (f"Reason: {reason}\n" if reason else "")
+        + "Execute it NEXT after completing the current step."
+    )
+
+
+@tool
+async def add_steps(
+    steps: list[dict],
+    after_step: int | None = None,
+    reason: str = "",
+) -> str:
+    """Add new steps to the plan mid-execution without exiting plan mode.
+
+    Use this when scope changes are discovered during execution (e.g. found a
+    new subdomain, discovered an additional attack surface). Does NOT require
+    re-approval — the steps are added and can be executed immediately.
+
+    Args:
+        steps: List of step dicts. Each must have at least a 'title' field.
+               Same schema as write_plan steps: {title, description, how_to, depends_on, priority}.
+        after_step: Insert these steps with depends_on=[after_step]. None = append with no deps.
+        reason: Why steps are being added (e.g. "Discovered new subdomain admin.target.com").
+    """
+    ctx = _get_run_context()
+    run_id = ctx["run_id"]
+    thread_id = ctx["thread_id"]
+    bus = ctx["parent_bus"]
+    import rai.harness.runner as _runner
+    reg = _runner._RUN_REGISTRY.get(run_id) or {}
+    redirect = _task_phase_gate(reg)
+    if redirect:
+        return redirect
+
+    if not steps:
+        return "No steps provided. Pass at least one step dict with a 'title' field."
+    if len(steps) > 10:
+        return "Maximum 10 new steps at a time (guard against runaway). Split into multiple calls."
+
+    existing_steps = reg.get("plan_steps", [])
+    max_num = max((s["number"] for s in existing_steps), default=0)
+
+    # Validate after_step reference
+    if after_step is not None and not _get_step(existing_steps, after_step):
+        valid = [s["number"] for s in existing_steps]
+        return f"after_step={after_step} not found. Valid step numbers: {valid}."
+
+    # Validate new steps using same schema
+    validated: list[dict] = []
+    errors: list[str] = []
+    for i, raw in enumerate(steps, 1):
+        try:
+            step = PlanStep(**raw)
+        except Exception as e:
+            errors.append(f"New step {i}: {e}")
+            continue
+        new_num = max_num + i
+        deps = step.depends_on if step.depends_on else ([after_step] if after_step else [])
+        validated.append({
+            "number": new_num,
+            "title": step.title,
+            "description": step.description,
+            "how_to": step.how_to,
+            "depends_on": deps,
+            "priority": step.priority,
+            "status": "pending",
+            "notes": "",
+            "reason": "",
+        })
+
+    if errors:
+        return "Step validation failed:\n" + "\n".join(errors)
+
+    existing_steps.extend(validated)
+    plan_data = reg.get("plan_data", {})
+    plan_data["total_steps"] = len(existing_steps)
+    _persist_plan(thread_id, reg)
+
+    await bus.publish("steps_added", {
+        "run_id": run_id,
+        "steps": validated,
+        "reason": reason,
+    })
+
+    added_list = "\n".join(
+        f"  {s['number']}. {s['title']}" + (f" [depends_on={s['depends_on']}]" if s['depends_on'] else "")
+        for s in validated
+    )
+    return (
+        f"{len(validated)} step(s) added to plan.\n"
+        + (f"Reason: {reason}\n" if reason else "")
+        + f"\nNew steps:\n{added_list}\n\n"
+        f"Total steps now: {len(existing_steps)}. "
+        "Continue execution — these steps are immediately available."
+    )
+
+
+def get_current_step() -> int:
+    """Return the most recently entered step number, or 0 if none active.
+
+    Used by findings_add to auto-link findings to the current plan step.
+    """
+    try:
+        ctx = _get_run_context()
+        run_id = ctx["run_id"]
+        import rai.harness.runner as _runner
+        reg = _runner._RUN_REGISTRY.get(run_id, {})
+        current_steps = reg.get("current_steps", [])
+        return current_steps[-1] if current_steps else 0
+    except Exception:
+        return 0
+
+
 def get_plan_tools() -> list:
     """Return all plan-mode tools to inject into the HTTP parent agent."""
     return [
         enter_plan_mode,
         write_plan,
+        read_plan,
         list_plan_steps,
         enter_step,
         mark_step_done,
         mark_step_blocked,
         exit_plan_mode,
+        escalate_step,
+        add_steps,
     ]

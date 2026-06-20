@@ -10,7 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
 from rai.agents.background import (
@@ -37,17 +38,24 @@ _DEFAULT_TASK_TIMEOUT = 3600.0
 
 
 def _extract_text(content: Any) -> str:
-    """Extract plain text from a LangChain message content field."""
+    """Extract plain text from a LangChain message content field.
+
+    Prefers 'text' blocks; falls back to 'thinking' blocks if no text found.
+    """
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = []
+        text_parts = []
+        thinking_parts = []
         for item in content:
             if isinstance(item, dict):
-                parts.append(item.get("text", ""))
-            else:
-                parts.append(str(item))
-        return "".join(parts)
+                if item.get("text"):
+                    text_parts.append(item["text"])
+                elif item.get("thinking"):
+                    thinking_parts.append(item["thinking"])
+            elif item:
+                text_parts.append(str(item))
+        return "".join(text_parts) or "".join(thinking_parts)
     return str(content)
 
 
@@ -136,6 +144,7 @@ async def _run_subagent(
     depends_on: list[str] | None,
     parent_api_key: str = "",
     parent_base_url: str = "",
+    parent_model: str = "",
 ) -> None:
     """Inner coroutine wrapped by asyncio.create_task() in launch_subagent()."""
     from rai import DEFAULT_MODEL
@@ -150,9 +159,9 @@ async def _run_subagent(
 
     try:
         # 1. Compile with full capabilities (disable_subagents=True prevents nesting)
-        resolved_model = model or DEFAULT_MODEL
-
         # Credential fallback: subagent's own config.toml wins; parent fills gaps.
+        # Model resolution: explicit > parent > DEFAULT. Factory's create_rai_agent()
+        # handles config.toml model override internally (line 619).
         from rai.config.agent import load_agent_config as _load_sub_cfg
         try:
             _sub_cfg = _load_sub_cfg(agent_name)
@@ -161,6 +170,8 @@ async def _run_subagent(
         except Exception:
             effective_api_key  = parent_api_key
             effective_base_url = parent_base_url
+
+        resolved_model = model or parent_model or DEFAULT_MODEL
 
         from rai.mcp.loader import resolve_and_load_mcp_tools as _load_mcp
         try:
@@ -220,11 +231,14 @@ async def _run_subagent(
             "model": resolved_model,
         })
 
-        # 3. Stream initial turn
-        await asyncio.wait_for(
-            _stream_subagent(task_id, graph, config, input_message, parent_bus),
-            timeout=timeout,
-        )
+        # 3. Stream initial turn (GraphInterrupt is normal — means HITL needed)
+        try:
+            await asyncio.wait_for(
+                _stream_subagent(task_id, graph, config, input_message, parent_bus),
+                timeout=timeout,
+            )
+        except GraphInterrupt:
+            pass
 
         # 4. HITL loop — mirrors parent runner.py execute_run() HITL loop
         from rai.harness.runner import _SESSION_APPROVED as _SA
@@ -242,14 +256,17 @@ async def _run_subagent(
             _req_names = [_ar.get("name", "") for _ar in action_requests if _ar.get("name")]
             if _req_names and all(t in _SA.get(parent_thread_id, set()) for t in _req_names):
                 _num_auto = len(action_requests) if action_requests else 1
-                await asyncio.wait_for(
-                    _stream_subagent(
-                        task_id, graph, config,
-                        Command(resume={"decisions": [{"type": "approve"}] * _num_auto}),
-                        parent_bus,
-                    ),
-                    timeout=timeout,
-                )
+                try:
+                    await asyncio.wait_for(
+                        _stream_subagent(
+                            task_id, graph, config,
+                            Command(resume={"decisions": [{"type": "approve"}] * _num_auto}),
+                            parent_bus,
+                        ),
+                        timeout=timeout,
+                    )
+                except GraphInterrupt:
+                    pass
                 continue
 
             fut: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
@@ -316,14 +333,17 @@ async def _run_subagent(
             else:
                 _resume_decisions = [{"type": "approve"}] * _num_actions
 
-            await asyncio.wait_for(
-                _stream_subagent(
-                    task_id, graph, config,
-                    Command(resume={"decisions": _resume_decisions}),
-                    parent_bus,
-                ),
-                timeout=timeout,
-            )
+            try:
+                await asyncio.wait_for(
+                    _stream_subagent(
+                        task_id, graph, config,
+                        Command(resume={"decisions": _resume_decisions}),
+                        parent_bus,
+                    ),
+                    timeout=timeout,
+                )
+            except GraphInterrupt:
+                pass
 
         # 5. Extract output from final checkpoint
         final = await graph.aget_state(config)
@@ -331,7 +351,14 @@ async def _run_subagent(
         for msg in reversed(msgs):
             if isinstance(msg, AIMessage):
                 output = _extract_text(msg.content)
-                break
+                if output:
+                    break
+                # AIMessage with empty content but tool_calls — check preceding ToolMessages
+                continue
+            if isinstance(msg, ToolMessage) and not output:
+                output = _extract_text(msg.content)
+                if output:
+                    break
 
         status = "completed"
 
@@ -440,10 +467,13 @@ async def _resume_subagent(
             "message": message if isinstance(message, str) else "(resumed from checkpoint)",
         })
 
-        await asyncio.wait_for(
-            _stream_subagent(task_id, graph, config, message, parent_bus),
-            timeout=timeout,
-        )
+        try:
+            await asyncio.wait_for(
+                _stream_subagent(task_id, graph, config, message, parent_bus),
+                timeout=timeout,
+            )
+        except GraphInterrupt:
+            pass
 
         # HITL loop — identical to _run_subagent phases 4
         from rai.harness.runner import _SESSION_APPROVED as _SA
@@ -463,14 +493,17 @@ async def _resume_subagent(
             _req_names = [_ar.get("name", "") for _ar in action_requests if _ar.get("name")]
             if _req_names and all(t in _SA.get(_parent_tid, set()) for t in _req_names):
                 _num_auto = len(action_requests) if action_requests else 1
-                await asyncio.wait_for(
-                    _stream_subagent(
-                        task_id, graph, config,
-                        Command(resume={"decisions": [{"type": "approve"}] * _num_auto}),
-                        parent_bus,
-                    ),
-                    timeout=timeout,
-                )
+                try:
+                    await asyncio.wait_for(
+                        _stream_subagent(
+                            task_id, graph, config,
+                            Command(resume={"decisions": [{"type": "approve"}] * _num_auto}),
+                            parent_bus,
+                        ),
+                        timeout=timeout,
+                    )
+                except GraphInterrupt:
+                    pass
                 continue
 
             fut: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
@@ -537,14 +570,17 @@ async def _resume_subagent(
             else:
                 _resume_decisions = [{"type": "approve"}] * _num_actions
 
-            await asyncio.wait_for(
-                _stream_subagent(
-                    task_id, graph, config,
-                    Command(resume={"decisions": _resume_decisions}),
-                    parent_bus,
-                ),
-                timeout=timeout,
-            )
+            try:
+                await asyncio.wait_for(
+                    _stream_subagent(
+                        task_id, graph, config,
+                        Command(resume={"decisions": _resume_decisions}),
+                        parent_bus,
+                    ),
+                    timeout=timeout,
+                )
+            except GraphInterrupt:
+                pass
 
         # Extract output
         final = await graph.aget_state(config)
@@ -552,7 +588,13 @@ async def _resume_subagent(
         for msg in reversed(msgs):
             if isinstance(msg, AIMessage):
                 output = _extract_text(msg.content)
-                break
+                if output:
+                    break
+                continue
+            if isinstance(msg, ToolMessage) and not output:
+                output = _extract_text(msg.content)
+                if output:
+                    break
 
         status = "turn_complete"
 
@@ -643,6 +685,7 @@ def launch_subagent(
     depends_on: list[str] | None = None,
     parent_api_key: str = "",
     parent_base_url: str = "",
+    parent_model: str = "",
 ) -> asyncio.Task:
     """Spawn a subagent as a background asyncio.Task.
 
@@ -699,6 +742,7 @@ def launch_subagent(
         depends_on=depends_on,
         parent_api_key=parent_api_key,
         parent_base_url=parent_base_url,
+        parent_model=parent_model,
     )
     task = asyncio.create_task(coro, name=f"subagent-{task_id[:8]}")
 
@@ -781,12 +825,13 @@ async def recover_incomplete_subagents(checkpointer: Any) -> None:
                 _cfg = _load_cfg(agent_name)
                 api_key  = (_cfg.api_key  if _cfg and _cfg.api_key  else "")
                 base_url = (_cfg.base_url if _cfg and _cfg.base_url else "")
+                cfg_model = (_cfg.model   if _cfg and _cfg.model    else "")
             except Exception:
-                api_key = base_url = ""
+                api_key = base_url = cfg_model = ""
 
             from rai import DEFAULT_MODEL
             graph, _ = create_rai_agent(
-                model=model or DEFAULT_MODEL,
+                model=model or cfg_model or DEFAULT_MODEL,
                 agent_name=agent_name,
                 system_prompt=system_prompt or None,
                 api_key=api_key,
@@ -822,7 +867,13 @@ async def recover_incomplete_subagents(checkpointer: Any) -> None:
                 for msg in reversed(msgs):
                     if isinstance(msg, AIMessage):
                         _ckpt_output = _extract_text(msg.content)
-                        break
+                        if _ckpt_output:
+                            break
+                        continue
+                    if isinstance(msg, ToolMessage) and not _ckpt_output:
+                        _ckpt_output = _extract_text(msg.content)
+                        if _ckpt_output:
+                            break
                 _ckpt_out_path = Path(f"/tmp/rai_subagent_{task_id[:12]}.json")
                 try:
                     _ckpt_out_path.write_text(json.dumps({

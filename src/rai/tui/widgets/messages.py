@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import itertools
 import time
 from typing import Any
 
@@ -15,8 +14,18 @@ def _escape(text: str) -> str:
     """Escape ALL [ and ] so Textual never mis-parses user text as markup tags."""
     return text.replace("[", "\\[").replace("]", "\\]")
 
-_SPINNER = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
-_spin_cycle = itertools.cycle(_SPINNER)
+_BLOOM = (
+    ("[dim]·[/dim]",                  "dim"),
+    ("[dim].[/dim]",                  "dim"),
+    ("[yellow]+[/yellow]",            "mid"),
+    ("[yellow]✶[/yellow]",            "bright"),
+    ("[bold yellow]✻[/bold yellow]",  "peak"),
+    ("[yellow]✽[/yellow]",            "bright"),
+    ("[yellow]✶[/yellow]",            "mid"),
+    ("[dim]+[/dim]",                  "dim"),
+    ("[dim]·[/dim]",                  "dim"),
+    ("[dim].[/dim]",                  "dim"),
+)
 
 _WORKING_PHRASES = (
     "Thinking…", "Reasoning…", "Analyzing…", "Pondering…",
@@ -426,7 +435,7 @@ class AssistantMsg(Widget):
         yield md
 
     def on_mount(self) -> None:
-        self._spinner_timer = self.set_interval(0.25, self._tick_spinner)
+        self._spinner_timer = self.set_interval(0.12, self._tick_spinner)
 
     def _tick_spinner(self) -> None:
         if self._buf:
@@ -434,14 +443,11 @@ class AssistantMsg(Widget):
                 self._spinner_timer.stop()
                 self._spinner_timer = None
             return
-        elapsed = int(time.monotonic() - self._start_time)
-        frame  = _SPINNER[self._spin_pos % len(_SPINNER)]
-        phrase = _WORKING_PHRASES[(self._spin_pos // 20) % len(_WORKING_PHRASES)]
+        bloom_frame, _ = _BLOOM[self._spin_pos % len(_BLOOM)]
+        phrase = _WORKING_PHRASES[(self._spin_pos // len(_BLOOM)) % len(_WORKING_PHRASES)]
         self._spin_pos += 1
         try:
-            self.query_one("#asst-spinner", Static).update(
-                f"[yellow]{frame}[/yellow] {phrase} [dim]({elapsed}s, esc to interrupt)[/dim]"
-            )
+            self.query_one("#asst-spinner", Static).update(f" {bloom_frame} {phrase}")
         except Exception:
             pass
 
@@ -606,9 +612,9 @@ class ToolCallMsg(Widget):
         if self.tool_name == "write_plan":
             if self._state == _STATE_RUNNING:
                 elapsed = time.monotonic() - self._start_time
-                frame   = _SPINNER[int(elapsed * 8) % len(_SPINNER)]
+                frame, _ = _BLOOM[int(elapsed * 8) % len(_BLOOM)]
                 return (
-                    f"[yellow]{frame}[/yellow] [bold]📋 Plan[/bold]  "
+                    f"{frame} [bold]📋 Plan[/bold]  "
                     f"[dim]{args}[/dim]  [dim]awaiting approval…[/dim]"
                 )
             if self._state == _STATE_SUCCESS:
@@ -627,9 +633,9 @@ class ToolCallMsg(Widget):
             disp  = (first[:80] + "…") if len(first) > 80 else first
             if self._state == _STATE_RUNNING:
                 elapsed = time.monotonic() - self._start_time
-                frame   = _SPINNER[int(elapsed * 8) % len(_SPINNER)]
+                frame, _ = _BLOOM[int(elapsed * 8) % len(_BLOOM)]
                 return (
-                    f"[yellow]{frame}[/yellow] ⬢ [bold]{name}[/bold]  "
+                    f"{frame} ⬢ [bold]{name}[/bold]  "
                     f"[dim]{_escape(disp)}[/dim]"
                 )
             if self._state == _STATE_SUCCESS:
@@ -651,8 +657,8 @@ class ToolCallMsg(Widget):
         # ── all other tools (icon + name(args)) ────────────────────────────
         if self._state == _STATE_RUNNING:
             elapsed = time.monotonic() - self._start_time
-            frame   = _SPINNER[int(elapsed * 8) % len(_SPINNER)]
-            return f"[yellow]{frame}[/yellow] {icon} [bold]{name}[/bold]([dim]{args}[/dim])"
+            frame, _ = _BLOOM[int(elapsed * 8) % len(_BLOOM)]
+            return f"{frame} {icon} [bold]{name}[/bold]([dim]{args}[/dim])"
         if self._state == _STATE_SUCCESS:
             return f"[green]✓[/green] {icon} [bold]{name}[/bold]([dim]{args}[/dim])"
         if self._state == _STATE_ERROR:

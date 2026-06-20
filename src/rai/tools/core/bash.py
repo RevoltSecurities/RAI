@@ -16,6 +16,7 @@ subagents are configured.  Do NOT add stub wrappers here.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import logging
 import os
@@ -28,6 +29,32 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# CWD ContextVar — set by execute_run() at run start
+# ---------------------------------------------------------------------------
+
+_cwd_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "rai_bash_cwd", default=""
+)
+
+
+def set_bash_cwd(cwd: str) -> contextvars.Token:
+    """Set the default working directory for BashTool in the current run.
+
+    Returns the contextvars Token so the caller can reset it in finally.
+    """
+    return _cwd_ctx.set(cwd)
+
+
+def reset_bash_cwd(token: contextvars.Token) -> None:
+    """Reset the CWD contextvar to its previous value."""
+    _cwd_ctx.reset(token)
+
+
+def get_bash_cwd() -> str:
+    """Get the current run's CWD (empty string if not set)."""
+    return _cwd_ctx.get()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -82,7 +109,14 @@ class BashInput(BaseModel):
             "Increase for long-running scans (nmap, nuclei, ffuf)."
         ),
     )
-    working_dir: str = Field("", description="Working directory; defaults to CWD if empty.")
+    working_dir: str = Field(
+        "",
+        description=(
+            "Working directory for command execution. "
+            "Leave empty to use the session's startup directory (auto-resolved). "
+            "Only set explicitly when you need to run in a different path."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +193,15 @@ class BashTool(BaseTool):
         if blocked:
             return blocked
 
-        cwd: str | None = working_dir.strip() or None
+        # Resolve CWD: explicit > ContextVar > process CWD
+        explicit_cwd = working_dir.strip()
+        _cwd_applied = False
+        if explicit_cwd:
+            cwd = explicit_cwd
+        else:
+            ctx_cwd = _cwd_ctx.get()
+            cwd = ctx_cwd or None
+            _cwd_applied = bool(ctx_cwd)
         effective_timeout = min(max(1, timeout), _MAX_TIMEOUT_SECONDS)
 
         try:
@@ -214,6 +256,10 @@ class BashTool(BaseTool):
         if proc.returncode != 0:
             output = f"{output.rstrip()}\n\nExit code: {proc.returncode}"
 
+        # Prepend CWD indicator when auto-resolved from harness context
+        if _cwd_applied:
+            output = f"[cwd: {cwd}]\n{output}"
+
         return output
 
     async def _arun(
@@ -227,10 +273,57 @@ class BashTool(BaseTool):
 
 
 # ---------------------------------------------------------------------------
+# SetCwdTool — persistent working directory switch
+# ---------------------------------------------------------------------------
+
+
+class SetCwdInput(BaseModel):
+    path: str = Field(
+        ...,
+        description=(
+            "Absolute or relative path to set as the new working directory. "
+            "Relative paths are resolved against the current CWD. "
+            "The directory must exist."
+        ),
+    )
+
+
+class SetCwdTool(BaseTool):
+    """Change the working directory for all subsequent bash commands in this run.
+
+    Equivalent to 'cd' — persistently updates the session's CWD.
+    All future bash commands that don't specify an explicit working_dir
+    will run in the new directory.
+    """
+
+    name: str = "set_cwd"
+    description: str = (
+        "Change working directory for this session. All subsequent bash commands "
+        "will run in the new directory. Use this instead of 'cd' since each bash "
+        "call is a separate subprocess. The path must exist."
+    )
+    args_schema: type[BaseModel] = SetCwdInput
+
+    def _run(self, path: str, **kwargs: Any) -> str:
+        current = _cwd_ctx.get() or os.getcwd()
+        resolved = Path(path) if Path(path).is_absolute() else Path(current) / path
+        resolved = resolved.resolve()
+
+        if not resolved.is_dir():
+            return f"[error] Directory does not exist: {resolved}"
+
+        _cwd_ctx.set(str(resolved))
+        return f"[cwd: {resolved}]"
+
+    async def _arun(self, path: str, **kwargs: Any) -> str:
+        return await asyncio.to_thread(self._run, path)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
 def get_builtin_tools() -> list[BaseTool]:
     """Return all built-in RAI tools ready to be added to the agent's tool list."""
-    return [BashTool()]
+    return [BashTool(), SetCwdTool()]

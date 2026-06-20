@@ -27,6 +27,7 @@ from rai.harness.subagents.registry import (
     _RUN_CONTEXT, RunContext,
     _SUBAGENT_REGISTRY, _SUBAGENT_BUSES, _SUBAGENT_LOCK, SubagentMeta,
 )
+from rai.harness.subagents_v2.service import SubagentService
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,9 @@ _TASK_SPAWNING_TOOLS = frozenset({
     "start_agent_task",
     "start_parallel_agents",
     "start_pipeline",
+    "Subagent",
+    "MultiSubagents",
+    "Pipeline",
 })
 
 _DEFAULT_TIMEOUT = 3600.0
@@ -136,7 +140,9 @@ async def execute_run(
     the inline SubagentWatcher loop so every re-invocation is also fully streamed.
     """
     run_start_time = datetime.now(UTC)
-    _ctx_token = None  # contextvars token for _RUN_CONTEXT — reset in finally
+    _ctx_token = None          # contextvars token for _RUN_CONTEXT — reset in finally
+    _allowed_tools_token = None  # contextvars token for AllowedToolsMiddleware
+    _cwd_token = None          # contextvars token for BashTool CWD — reset in finally
     # Mutable counters — mutated inside _stream_once via nonlocal
     _num_turns: list[int] = [0]  # list to allow nonlocal mutation in nested function
     _first_token_ms: list[float | None] = [None]
@@ -314,14 +320,6 @@ async def execute_run(
                             "tool_name": tool_name,
                             "tool_input": event["data"].get("input"),
                         })
-                        # B3 — emit permission_denied when tool is not in whitelist
-                        if allowed_tools is not None and tool_name not in allowed_tools:
-                            await bus.publish("permission_denied", {
-                                "thread_id": thread_id,
-                                "tool_name": tool_name,
-                                "reason": "tool_not_in_allowed_list",
-                                "allowed_tools": allowed_tools,
-                            })
 
                     elif kind == "on_tool_end":
                         tool_output = event["data"].get("output", "")
@@ -380,8 +378,10 @@ async def execute_run(
             _pcfg = _load_cfg(agent_name)
             _parent_api_key  = (_pcfg.api_key  if _pcfg else "") or ""
             _parent_base_url = (_pcfg.base_url if _pcfg else "") or ""
+            _parent_model    = model_hint or (_pcfg.model if _pcfg else "") or ""
         except Exception:
             _parent_api_key = _parent_base_url = ""
+            _parent_model = model_hint or ""
 
         _ctx_token = _RUN_CONTEXT.set(RunContext(
             run_id=run_id,
@@ -390,27 +390,30 @@ async def execute_run(
             checkpointer=checkpointer,
             parent_api_key=_parent_api_key,
             parent_base_url=_parent_base_url,
+            parent_model=_parent_model,
             agent_name=agent_name,
         ))
+
+        # B3 — propagate the per-run allowed_tools list into the middleware layer.
+        # AllowedToolsMiddleware reads this ContextVar; None = unrestricted.
+        from rai.middleware.allowed_tools import set_allowed_tools, reset_allowed_tools
+        _allowed_tools_token = set_allowed_tools(allowed_tools)
+
+        # Propagate CWD into BashTool's ContextVar so commands run in the correct directory.
+        from rai.tools.core.bash import set_bash_cwd, reset_bash_cwd
+        _run_cwd = getattr(runnable, "_cwd", "") or str(Path.cwd())
+        _cwd_token = set_bash_cwd(_run_cwd)
 
         # Propagate recursion_limit into the per-run runnable's config so all
         # three streaming paths in _stream_once() see it (Command, stream, checkpoint).
         if isinstance(getattr(runnable, "_config", None), dict):
             runnable._config["recursion_limit"] = recursion_limit
 
-        # ── Plan mode preamble injection ──────────────────────────────────────
+        # ── Plan mode flag (enforcement handled by PlanModeMiddleware) ────────
         if plan_mode:
+            _RUN_REGISTRY[run_id]["plan_mode"] = True
             _RUN_REGISTRY[run_id]["status"] = "planning"
-            input_message = (
-                "[PLAN MODE ACTIVE]\n"
-                "Research and plan ONLY. Use read-only tools (Read, Glob, Grep, "
-                "WebSearch, WebFetch, GET requests). Do NOT write files, execute "
-                "code, or make mutating API calls.\n"
-                "When you have a complete plan, call write_plan(content) to submit "
-                "it for approval. After approval, execute the plan step by step "
-                "exactly as written.\n\n"
-                f"User request:\n{input_message}"
-            )
+
 
         # ── Initial turn ──────────────────────────────────────────────────────
         await _stream_once(input_message)
@@ -422,6 +425,8 @@ async def execute_run(
         # ── Inline SubagentWatcher loop ───────────────────────────────────────
         deadline = asyncio.get_event_loop().time() + timeout
         _deepagents_bridged: set[str] = set()  # task_ids mirrored → _SUBAGENT_REGISTRY
+        _deferred_notifs: dict[str, dict] = {}  # notifications stashed while graph was interrupted
+        _v2_svc = SubagentService.instance()
 
         while True:
             # B6 — hard turn cap: stop watching after max_turns is reached
@@ -432,8 +437,39 @@ async def execute_run(
                 notifs = dict(_PENDING_NOTIFICATIONS)
                 active = dict(_TASK_REGISTRY)
 
-            if not notifs and not active:
-                break
+            # Check v2 subagent system for active tasks + pending completions
+            _v2_has_active = _v2_svc.has_active_tasks(run_id)
+            _v2_notif = None
+            if not notifs and not active and not _v2_has_active:
+                # All tasks terminal — but drain any queued notification before exiting.
+                # Race: executor pushes notification then marks terminal; watcher sees
+                # terminal status but hasn't read the queue yet.
+                try:
+                    _v2_notif = await asyncio.wait_for(
+                        _v2_svc.wait_completion(run_id, timeout=0.01),
+                        timeout=0.05,
+                    )
+                except (asyncio.TimeoutError, Exception):
+                    _v2_notif = None
+                if _v2_notif is None:
+                    break
+                # Got a straggler notification — fall through to process it
+
+            # Drain v2 completion if available (non-blocking)
+            # Skip if we already captured a straggler notification above
+            if _v2_notif is None and (_v2_has_active or (not notifs and not active)):
+                try:
+                    _v2_notif = await asyncio.wait_for(
+                        _v2_svc.wait_completion(run_id, timeout=0.05),
+                        timeout=0.1,
+                    )
+                except (asyncio.TimeoutError, Exception):
+                    _v2_notif = None
+
+            if not notifs and not active and _v2_notif is None:
+                if not _v2_has_active:
+                    break
+                # v2 tasks still running — fall through to wait via notif_event
 
             if asyncio.get_event_loop().time() > deadline:
                 await bus.publish("error", {
@@ -484,7 +520,7 @@ async def execute_run(
                     await bus.publish("notification", payload)
                     await notif_bus.publish(thread_id, "notification", payload)
 
-                    if notif.get("status") in _TERMINAL_STATUSES:
+                    if notif.get("status") in _TERMINAL_STATUSES or notif.get("status") in ("failed", "completed"):
                         await bus.publish("task_completed", {
                             "thread_id": thread_id,
                             "task_id": tid,
@@ -578,7 +614,15 @@ async def execute_run(
                                 }
                     last = (snapshot.values.get("messages") or [None])[-1]
                     _graph_interrupted = bool(snapshot.tasks and snapshot.tasks[0].interrupts)
-                    if not isinstance(last, HumanMessage) and not _graph_interrupted:
+                    if _graph_interrupted:
+                        # Graph is at HITL — can't inject notifications now.
+                        # Pop them and stash for injection after HITL resolves.
+                        with _NOTIF_LOCK:
+                            for tid in notifs:
+                                _PENDING_NOTIFICATIONS.pop(tid, None)
+                        _deferred_notifs.update(notifs)
+                        break
+                    if not isinstance(last, HumanMessage):
                         # Build notification text (same format as pop_pending_notification_text)
                         notif_lines: list[str] = []
                         for tid, notif in notifs.items():
@@ -618,6 +662,38 @@ async def execute_run(
                             _hit_max_turns[0] = True
                 except Exception as exc:
                     logger.debug("Watcher re-invoke failed: %s", exc)
+            elif _v2_notif is not None:
+                # v2 subagent completed — inject notification and re-invoke agent
+                _v2_label = f" ({_v2_notif['label']})" if _v2_notif.get("label") else ""
+                _v2_tid = _v2_notif.get('task_id', '')
+                _v2_text = (
+                    f"<task-notification>\n"
+                    f"[Background agent completed]\n"
+                    f"Agent: {_v2_notif.get('agent_name', '')} | "
+                    f"Task: {_v2_tid}{_v2_label} | "
+                    f"Status: {_v2_notif.get('status', '')}\n"
+                    f"Output preview: {_v2_notif.get('output_preview', '')[:400]}\n"
+                    f"Full output: /tmp/rai_{_v2_tid}_output.md\n"
+                    f"</task-notification>\n\n"
+                    f"Summarise what the background agent(s) completed and their "
+                    f"key results — only if relevant to the current task."
+                )
+                try:
+                    snapshot = await runnable.get_state()
+                    _graph_interrupted = bool(snapshot.tasks and snapshot.tasks[0].interrupts)
+                    if _graph_interrupted:
+                        _v2_svc.defer_notification(run_id, _v2_notif)
+                    else:
+                        await bus.publish("watcher_invoke", {
+                            "thread_id": thread_id,
+                            "reason": "v2_notification_received",
+                            "pending_count": 1,
+                        })
+                        await _stream_once(_v2_text)
+                        if max_turns is not None and _num_turns[0] >= max_turns:
+                            _hit_max_turns[0] = True
+                except Exception as exc:
+                    logger.debug("V2 notification re-invoke failed: %s", exc)
             else:
                 # Fast wait: notif_event fires within 50ms of new activity
                 notif_event.clear()
@@ -829,6 +905,59 @@ async def execute_run(
                 except Exception:
                     break
 
+        # ── Inject deferred notifications (stashed while graph was interrupted) ──
+        if _deferred_notifs and not _hit_max_turns[0]:
+            try:
+                notif_lines_d: list[str] = []
+                for tid, notif in _deferred_notifs.items():
+                    preview = (notif.get("output") or "(no output)")[:400]
+                    status = notif.get("status", "")
+                    agent_nm = notif.get("agent_name", "")
+                    output_file = notif.get("output_file", "")
+                    if status == "turn_complete":
+                        notif_lines_d.append(
+                            f"[Background agent turn completed]\n"
+                            f"Agent: {agent_nm} | Task ID: {tid}\n"
+                            f"Output preview: {preview}\n"
+                            f"Use get_agent_response(task_id) to read the full reply, "
+                            f"or update_agent_task(task_id, message) to continue the conversation."
+                        )
+                    else:
+                        notif_lines_d.append(
+                            f"[Background agent completed]\n"
+                            f"Agent: {agent_nm} | Task ID: {tid} | Status: {status}\n"
+                            f"Output preview: {preview}\n"
+                            f"Full output: {output_file}"
+                        )
+                notif_text_d = "\n\n".join(notif_lines_d)
+                notif_text_d += "\n\nSummarise what the background agent(s) completed and their key results to the user — only if the outcome is relevant to the current task."
+                await bus.publish("watcher_invoke", {
+                    "thread_id": thread_id,
+                    "reason": "deferred_notification_after_hitl",
+                    "pending_count": len(_deferred_notifs),
+                })
+                await _stream_once(notif_text_d)
+            except Exception as exc:
+                logger.debug("Deferred notification injection failed: %s", exc)
+            _deferred_notifs.clear()
+
+        # ── Drain v2 subagent deferred notifications (stashed by SubagentService) ──
+        try:
+            _v2_service = SubagentService.instance()
+            _v2_deferred = _v2_service.drain_deferred(run_id)
+            if _v2_deferred and not _hit_max_turns[0]:
+                for _v2n in _v2_deferred:
+                    await bus.publish("task_completed", {
+                        "thread_id": thread_id,
+                        "task_id": _v2n.get("task_id", ""),
+                        "status": _v2n.get("status", ""),
+                        "agent_name": _v2n.get("agent_name", ""),
+                        "output": _v2n.get("output_preview", ""),
+                        "output_file": _v2n.get("output_file", ""),
+                    })
+        except Exception:
+            pass
+
         # ── Final output ──────────────────────────────────────────────────────
         try:
             final = await runnable.get_state()
@@ -838,6 +967,12 @@ async def execute_run(
             output = ""
 
         duration_ms = int((datetime.now(UTC) - run_start_time).total_seconds() * 1000)
+        # ── Cost calculation ─────────────────────────────────────────────────
+        try:
+            from rai.middleware.cost_tracking import compute_cost
+            _total_cost = compute_cost(_model_usage) or None
+        except Exception:
+            _total_cost = None
         # Preserve "failed" status set by tools (e.g. plan approval timeout)
         _tool_failed = _RUN_REGISTRY[run_id].get("status") == "failed"
         _final_status = "failed" if _tool_failed else "completed"
@@ -858,7 +993,7 @@ async def execute_run(
             "ttft_ms": _first_token_ms[0],
             "usage": dict(_usage_accum),
             "model_usage": dict(_model_usage),
-            "total_cost_usd": None,
+            "total_cost_usd": _total_cost,
         })
         await bus.publish("run_end", {
             "run_id": run_id,
@@ -874,7 +1009,7 @@ async def execute_run(
             "ttft_ms": _first_token_ms[0],
             "usage": dict(_usage_accum),
             "model_usage": dict(_model_usage),
-            "total_cost_usd": None,
+            "total_cost_usd": _total_cost,
         })
 
         if self_learn:
@@ -969,6 +1104,16 @@ async def execute_run(
         _RUN_TASKS.pop(run_id, None)
         if _ctx_token is not None:
             _RUN_CONTEXT.reset(_ctx_token)
+        if _allowed_tools_token is not None:
+            try:
+                reset_allowed_tools(_allowed_tools_token)
+            except Exception:
+                pass
+        if _cwd_token is not None:
+            try:
+                reset_bash_cwd(_cwd_token)
+            except Exception:
+                pass
         notif_bus.detach()
         stop_flag.set()
         monitor_task.cancel()
@@ -979,12 +1124,21 @@ async def execute_run(
 # ── Content block helpers ─────────────────────────────────────────────────────
 
 def _extract_text(content: Any) -> str:
-    """Extract plain text from a str or list of content blocks."""
+    """Extract plain text from a str or list of content blocks.
+
+    Prefers text blocks; falls back to thinking blocks if no text found.
+    """
     if isinstance(content, list):
-        return " ".join(
+        text = " ".join(
             b.get("text", "") if isinstance(b, dict) else str(b)
             for b in content
             if not isinstance(b, dict) or b.get("type") in (None, "text")
+        ).strip()
+        if text:
+            return text
+        return " ".join(
+            b.get("thinking", "") for b in content
+            if isinstance(b, dict) and b.get("thinking")
         ).strip()
     return str(content) if content else ""
 

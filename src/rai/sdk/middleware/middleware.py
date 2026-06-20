@@ -16,7 +16,13 @@ from rai.middleware.ratelimit import RateLimitMiddleware
 from rai.middleware.sanitizer import EmptyContentSanitizerMiddleware
 from rai.middleware.compression import MessageCompressionMiddleware
 from rai.middleware.tool_compaction import ToolResultCompressionMiddleware
+from rai.middleware.write_truncate import WriteTruncateMiddleware
 from rai.middleware.loop_detection import LoopDetectionMiddleware
+from rai.middleware.read_dedup import ReadFileDedupMiddleware
+from rai.middleware.subagent_restrict import SubagentRestrictMiddleware
+from rai.middleware.allowed_tools import AllowedToolsMiddleware
+from rai.middleware.cost_tracking import CostTrackingMiddleware
+from rai.middleware.retry import RetryMiddleware
 
 try:
     from rai.middleware.prompt_cache import RAIPromptCachingMiddleware
@@ -28,6 +34,7 @@ from deepagents.middleware import MemoryMiddleware, SkillsMiddleware
 
 # Background agent middleware
 from rai.agents.background import LocalAsyncAgentMiddleware
+from rai.harness.subagents_v2 import AsyncRaiSubagentsMiddleware
 
 __all__ = [
     "AuditLogMiddleware",
@@ -46,5 +53,12 @@ __all__ = [
     "RTKToolMiddleware",
     "MessageCompressionMiddleware",
     "ToolResultCompressionMiddleware",
+    "WriteTruncateMiddleware",
     "LoopDetectionMiddleware",
+    "ReadFileDedupMiddleware",
+    "SubagentRestrictMiddleware",
+    "AllowedToolsMiddleware",
+    "CostTrackingMiddleware",
+    "RetryMiddleware",
+    "AsyncRaiSubagentsMiddleware",
 ]

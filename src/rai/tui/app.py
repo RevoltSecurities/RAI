@@ -34,7 +34,9 @@ from rai.tui.runner import (
     SSEEventPump,
     StepBlocked,
     StepComplete,
+    StepEscalated,
     StepStarted,
+    StepsAdded,
     SubagentAdded,
     SubagentDone,
     SubagentHITL,
@@ -78,6 +80,7 @@ from rai.tui.widgets import (
     WelcomeBanner,
     WizardStepWidget,
 )
+from rai.tui.branding import BrandingConfig
 
 # Plan harness execution tools — suppressed from generic ToolCallMsg rendering.
 # Visual feedback for these comes from SSE step events (StepStartMsg, etc.) and
@@ -87,6 +90,7 @@ _PLAN_EXEC_TOOLS = frozenset({
     "mark_step_blocked", "exit_plan_mode", "list_plan_steps",
 })
 from rai.tui.widgets.hitl_panel import HITLPanel as HITLPanelWidget
+from rai.tui.widgets.plan_step_panel import PlanStepPanel
 from rai.tui.widgets.messages import _args_inline, _escape
 
 _SHOW_BANNER = True  # unused module constant — banner logic is in RaiHttpTUIApp._show_banner
@@ -101,7 +105,7 @@ class RaiHttpTUIApp(App):
 
     BINDINGS = [
         Binding("escape", "cancel_run", "↺ Cancel", show=False, priority=True),
-        Binding("ctrl+b", "background_run", "Background", show=True),
+        Binding("ctrl+b", "background_run", "Background", show=False),
         Binding("ctrl+o", "open_runs", "Runs", show=True),
         Binding("ctrl+n", "new_thread", "New Thread", show=True),
         Binding("ctrl+r", "resume_thread", "Resume", show=True),
@@ -109,6 +113,7 @@ class RaiHttpTUIApp(App):
         Binding("ctrl+a", "toggle_auto_approve", "Auto-Approve", show=True),
         Binding("ctrl+k", "clear_messages", "Clear", show=True),
         Binding("ctrl+p", "toggle_plan", "Plan", show=True),
+        Binding("ctrl+g", "open_agents", "Agents", show=True),
         Binding("ctrl+l", "toggle_subagents", "Subagents", show=False),
         Binding("ctrl+x", "open_editor", "Editor", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
@@ -124,6 +129,7 @@ class RaiHttpTUIApp(App):
         thread_id: str | None = None,
         banner: str | None = None,
         default_theme: str = "github-dark",
+        branding: "BrandingConfig | None" = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -131,6 +137,7 @@ class RaiHttpTUIApp(App):
         self._agent = agent
         self._api_key = api_key
         self._initial_thread_id = thread_id
+        self._branding = branding
         # banner=None  → show default RAI banner
         # banner=""    → suppress banner entirely
         # banner="…"   → show custom markup banner
@@ -149,12 +156,15 @@ class RaiHttpTUIApp(App):
         self._subagent_groups: dict[str, SubagentGroup] = {}
         self._subagent_run_ids: dict[str, str] = {}   # task_id → run_id for server cancel
         self._last_assistant: AssistantMsg | None = None
+        self._activity_bloom: AssistantMsg | None = None
         self._current_thinking: ThinkingMsg | None = None
         self._scroll_pending = False
+        self._pending_plan_md: str = ""
         self._current_run_prompt: str = ""
         self._welcome_banner: WelcomeBanner | None = None
         self._detail_screen: RunDetailScreen | None = None
         self._detail_run_id: str | None = None
+        self._agents_screen: "AgentsScreen | None" = None
         self._discovered_skills: list[dict] = []
         self._model_override: str | None = None
         self._mcp_server_infos: list = []
@@ -171,6 +181,7 @@ class RaiHttpTUIApp(App):
         with VerticalScroll(id="chat"):
             yield Container(id="messages")
         yield SubagentTreePanel(id="subagent-tree")
+        yield PlanStepPanel(id="plan-step-panel")
         yield PlanPanel(id="plan-panel")
         yield HITLPanelWidget(id="hitl-panel")
         yield AskUserPanel(id="ask-user-panel")
@@ -211,7 +222,7 @@ class RaiHttpTUIApp(App):
             header.server_ok = False
 
         if self._show_banner:
-            wb = WelcomeBanner(self._agent, self._base_url, custom_markup=self._banner_markup)
+            wb = WelcomeBanner(self._agent, self._base_url, branding=self._branding, custom_markup=self._banner_markup)
             self._welcome_banner = wb
             container = self.query_one("#messages", Container)
             await container.mount(wb)
@@ -315,6 +326,12 @@ class RaiHttpTUIApp(App):
                         or c.strip() == "/compact"
                         or c.strip().startswith("<system-reminder>")
                         or "<system-reminder>" in c
+                        or "<plan-harness-restricted>" in c
+                        or "<plan-harness-blocked>" in c
+                        or "<task-harness-enforce>" in c
+                        or "<task-harness-notify>" in c
+                        or "<task-notification>" in c
+                        or "<system-info>" in c
                     ):
                         continue
                     await container.mount(UserMsg(c))
@@ -354,7 +371,8 @@ class RaiHttpTUIApp(App):
                         w.set_success(content)
 
             # Footer divider after messages (like deepagents), with truncation notice
-            await container.mount(HistoryDivider(len(messages), thread_id, total=total))
+            if messages:
+                await container.mount(HistoryDivider(len(messages), thread_id, total=total))
 
             self._active_thread_id = thread_id
             self.query_one("#header", HeaderBar).thread_id = thread_id
@@ -377,10 +395,7 @@ class RaiHttpTUIApp(App):
             self.query_one("#subagent-tree", SubagentTreePanel).tick()
         except Exception:
             pass
-        try:
-            self.query_one("#bg-runs-panel", BackgroundRunsPanel).tick()
-        except Exception:
-            pass
+        pass
         # Flush batched thinking content
         if self._current_thinking is not None:
             self._current_thinking.flush()
@@ -423,7 +438,7 @@ class RaiHttpTUIApp(App):
         elif command in ("/runs", "/o"):
             self.action_open_runs()
         elif command == "/bg":
-            self.action_background_run()
+            pass
         elif command in ("/auto", "/a"):
             self.action_toggle_auto_approve()
         elif command == "/compact":
@@ -469,16 +484,13 @@ class RaiHttpTUIApp(App):
         self._current_run_prompt = text
         self._last_assistant = None
         self._current_thinking = None
+        self._skip_harness_xml = False
         self._tool_widgets.clear()
         self._subagent_groups.clear()
         self._subagent_run_ids.clear()
 
         container = self.query_one("#messages", Container)
         await container.mount(UserMsg(text))
-
-        am = AssistantMsg()
-        await container.mount(am)
-        self._last_assistant = am
         self.query_one("#chat", VerticalScroll).scroll_end(animate=False)
 
         self.query_one("#input-bar", InputBar).set_disabled(True)
@@ -519,6 +531,16 @@ class RaiHttpTUIApp(App):
             header = self.query_one("#header", HeaderBar)
             header.thread_id = run.thread_id or ""
 
+            if self._activity_bloom is not None:
+                if self._activity_bloom.is_mounted:
+                    await self._activity_bloom.remove()
+                self._activity_bloom = None
+            bloom = AssistantMsg()
+            container = self.query_one("#messages", Container)
+            await container.mount(bloom)
+            self._activity_bloom = bloom
+            self.query_one("#chat", VerticalScroll).scroll_end(animate=False)
+
             pump = SSEEventPump()
             task = asyncio.create_task(
                 pump.run(self, self._client, self._agent, run.run_id)
@@ -534,6 +556,17 @@ class RaiHttpTUIApp(App):
     # SSE event handlers
     # ------------------------------------------------------------------
 
+    _HARNESS_OPEN_TAGS = (
+        "<plan-harness-restricted>", "<plan-harness-blocked>",
+        "<task-harness-enforce>", "<task-harness-notify>",
+        "<task-notification>", "<system-info>", "<system-reminder>",
+    )
+    _HARNESS_CLOSE_TAGS = (
+        "</plan-harness-restricted>", "</plan-harness-blocked>",
+        "</task-harness-enforce>", "</task-harness-notify>",
+        "</task-notification>", "</system-info>", "</system-reminder>",
+    )
+
     async def on_append_token(self, event: AppendToken) -> None:
         if event.run_id in self._bg_run_ids:
             try:
@@ -546,15 +579,30 @@ class RaiHttpTUIApp(App):
             except Exception:
                 pass
             return
+
+        # Filter harness XML blocks from live streaming output
+        if any(t in event.content for t in self._HARNESS_OPEN_TAGS):
+            self._skip_harness_xml = True
+            return
+        if getattr(self, "_skip_harness_xml", False):
+            if any(t in event.content for t in self._HARNESS_CLOSE_TAGS):
+                self._skip_harness_xml = False
+            return
+
         if self._current_thinking is not None and not self._current_thinking._done:
             self._current_thinking.mark_done()
+        if self._activity_bloom and self._activity_bloom.is_mounted:
+            self._activity_bloom.display = False
         if self._last_assistant is None or self._last_assistant._is_final:
             am = AssistantMsg()
             container = self.query_one("#messages", Container)
-            await container.mount(am)
+            if self._activity_bloom and self._activity_bloom.is_mounted:
+                await container.mount(am, before=self._activity_bloom)
+            else:
+                await container.mount(am)
             self._last_assistant = am
         self._last_assistant.append_text(event.content)
-        self._scroll_pending = True  # batched — flushed by _tick_animations
+        self._scroll_pending = True
 
     def on_append_thinking(self, event: AppendThinking) -> None:
         if event.run_id in self._bg_run_ids:
@@ -568,11 +616,16 @@ class RaiHttpTUIApp(App):
             except Exception:
                 pass
             return
+        if self._activity_bloom and self._activity_bloom.is_mounted:
+            self._activity_bloom.display = False
         if self._current_thinking is None:
             thinking = ThinkingMsg()
             self._current_thinking = thinking
             container = self.query_one("#messages", Container)
-            self.call_after_refresh(container.mount, thinking)
+            if self._activity_bloom and self._activity_bloom.is_mounted:
+                self.call_after_refresh(container.mount, thinking, before=self._activity_bloom)
+            else:
+                self.call_after_refresh(container.mount, thinking)
         self._current_thinking.append(event.content)
 
     async def on_tool_started(self, event: ToolStarted) -> None:
@@ -593,23 +646,23 @@ class RaiHttpTUIApp(App):
             except Exception:
                 pass
             return
-        # Sweep ALL empty AssistantMsg spinners — not just _last_assistant —
-        # to kill orphans left by parallel tool completions.
-        try:
-            for w in list(self.query(AssistantMsg)):
-                if not w._buf and not w._is_final:
-                    await w.remove()
-                elif not w._is_final:
-                    w.set_final()
-        except Exception:
-            pass
+        if self._last_assistant is not None:
+            if self._last_assistant._buf:
+                self._last_assistant.set_final()
+            elif self._last_assistant != self._activity_bloom:
+                await self._last_assistant.remove()
         self._last_assistant = None
         if self._current_thinking is not None:
             self._current_thinking.mark_done()
         self._current_thinking = None
+        if self._activity_bloom and self._activity_bloom.is_mounted:
+            self._activity_bloom.display = True
         container = self.query_one("#messages", Container)
         tool_widget = ToolCallMsg(event.tool_name, event.tool_input)
-        await container.mount(tool_widget)
+        if self._activity_bloom and self._activity_bloom.is_mounted:
+            await container.mount(tool_widget, before=self._activity_bloom)
+        else:
+            await container.mount(tool_widget)
         key = f"{event.run_id}:{event.tool_name}:{len(self._tool_widgets)}"
         self._tool_widgets[key] = tool_widget
         self.query_one("#chat", VerticalScroll).scroll_end(animate=False)
@@ -643,16 +696,6 @@ class RaiHttpTUIApp(App):
                 else:
                     w.set_success(output)
                 break
-        # Mount a spinner only if there isn't already a live one waiting.
-        # This prevents duplicate spinners from parallel tool completions.
-        if self._active_run_id == event.run_id:
-            if (self._last_assistant is None
-                    or self._last_assistant._is_final
-                    or self._last_assistant._buf):
-                am = AssistantMsg()
-                container = self.query_one("#messages", Container)
-                await container.mount(am)
-                self._last_assistant = am
 
     def on_permission_denied(self, event: PermissionDenied) -> None:
         for key in reversed(list(self._tool_widgets.keys())):
@@ -738,9 +781,14 @@ class RaiHttpTUIApp(App):
         self.query_one("#plan-panel", PlanPanel).show(event.plan, event.run_id, self._agent)
         self.query_one("#status-bar", StatusBar).mode_label = "plan"
         self.query_one("#header", HeaderBar).plan_mode = True
+        self._pending_plan_md = event.plan
 
     def on_plan_done(self, event: PlanDone) -> None:
-        pass  # badge stays "plan" through execution — cleared only on plan_completed / run_completed
+        if event.approved and self._pending_plan_md:
+            panel = self.query_one("#plan-step-panel", PlanStepPanel)
+            panel.load_steps(self._pending_plan_md)
+            panel.add_class("-visible")
+            self._pending_plan_md = ""
 
     def on_subagent_added(self, event: SubagentAdded) -> None:
         self._subagent_run_ids[event.task_id] = event.run_id
@@ -752,9 +800,13 @@ class RaiHttpTUIApp(App):
         try:
             bg = self.query_one("#bg-runs-panel", BackgroundRunsPanel)
             bg.add(event.task_id, event.agent_name)
-            bg.show_panel()
         except Exception:
             pass
+        if self._agents_screen:
+            from rai.tui.screens.agents_screen import AgentsScreen
+            self._agents_screen.post_message(AgentsScreen.LiveEvent(event.task_id, {
+                "type": "started", "agent_name": event.agent_name,
+            }))
 
     def on_subagent_token(self, event: SubagentToken) -> None:
         if event.task_id in self._subagent_groups:
@@ -769,6 +821,11 @@ class RaiHttpTUIApp(App):
                 )
         except Exception:
             pass
+        if self._agents_screen:
+            from rai.tui.screens.agents_screen import AgentsScreen
+            self._agents_screen.post_message(AgentsScreen.LiveEvent(event.task_id, {
+                "type": "message", "text": event.content,
+            }))
 
     def on_subagent_thinking(self, event: SubagentThinking) -> None:
         try:
@@ -780,6 +837,11 @@ class RaiHttpTUIApp(App):
                 )
         except Exception:
             pass
+        if self._agents_screen:
+            from rai.tui.screens.agents_screen import AgentsScreen
+            self._agents_screen.post_message(AgentsScreen.LiveEvent(event.task_id, {
+                "type": "thinking", "text": event.content,
+            }))
 
     async def on_subagent_tool_started(self, event: SubagentToolStarted) -> None:
         if event.task_id in self._subagent_groups:
@@ -798,6 +860,12 @@ class RaiHttpTUIApp(App):
                 }))
         except Exception:
             pass
+        if self._agents_screen:
+            from rai.tui.screens.agents_screen import AgentsScreen
+            self._agents_screen.post_message(AgentsScreen.LiveEvent(event.task_id, {
+                "type": "tool_start", "name": event.tool_name,
+                "input": event.tool_input,
+            }))
 
     def on_subagent_tool_finished(self, event: SubagentToolFinished) -> None:
         if event.task_id in self._subagent_groups:
@@ -821,6 +889,14 @@ class RaiHttpTUIApp(App):
                 }))
         except Exception:
             pass
+        if self._agents_screen:
+            from rai.tui.screens.agents_screen import AgentsScreen
+            output = event.tool_output
+            self._agents_screen.post_message(AgentsScreen.LiveEvent(event.task_id, {
+                "type": "tool_end",
+                "output": output,
+                "is_error": isinstance(output, str) and output.lower().startswith("error"),
+            }))
 
     def on_subagent_done(self, event: SubagentDone) -> None:
         self.query_one("#subagent-tree", SubagentTreePanel).mark_done(event.task_id, event.status)
@@ -836,6 +912,11 @@ class RaiHttpTUIApp(App):
             self.set_timer(3.0, lambda: bg.remove(run_id_copy))
         except Exception:
             pass
+        if self._agents_screen:
+            from rai.tui.screens.agents_screen import AgentsScreen
+            self._agents_screen.post_message(AgentsScreen.LiveEvent(event.task_id, {
+                "type": "done", "status": event.status,
+            }))
 
     async def on_subagent_hitl(self, event: SubagentHITL) -> None:
         if self._auto_approve:
@@ -927,19 +1008,16 @@ class RaiHttpTUIApp(App):
 
         self._active_run_id = None
 
+        if self._activity_bloom is not None:
+            if self._activity_bloom.is_mounted:
+                await self._activity_bloom.remove()
+            self._activity_bloom = None
         if self._last_assistant:
             self._last_assistant.set_final()
+        self._last_assistant = None
         if self._current_thinking is not None:
             self._current_thinking.mark_done()
         self._current_thinking = None
-
-        # Kill any orphaned AssistantMsg spinners and ThinkingMsg widgets
-        for w in list(self.query(AssistantMsg)):
-            if not w._buf and not w._is_final:
-                await w.remove()
-            elif not w._is_final:
-                w.set_final()
-        self._last_assistant = None
         for w in list(self.query(ThinkingMsg)):
             w.mark_done()
 
@@ -967,6 +1045,9 @@ class RaiHttpTUIApp(App):
         status_bar.mode_label = ""
         self.query_one("#header", HeaderBar).plan_mode = False
         self.query_one("#input-bar", InputBar).set_plan_mode(False)
+        step_panel = self.query_one("#plan-step-panel", PlanStepPanel)
+        step_panel.clear()
+        step_panel.remove_class("-visible")
 
         # Accumulate token usage from completed run
         completed_run_id = event.run_id
@@ -1019,10 +1100,10 @@ class RaiHttpTUIApp(App):
         if self._last_assistant:
             self._last_assistant.append_text(f"\n\n[red]Error: {event.message}[/red]")
             self._last_assistant.set_final()
-        # Stop timers on ALL orphaned spinners (sync — can't await remove)
-        for w in list(self.query(AssistantMsg)):
-            if not w._is_final:
-                w.set_final()
+        if self._activity_bloom is not None:
+            if self._activity_bloom.is_mounted:
+                self._activity_bloom.set_final()
+            self._activity_bloom = None
         for w in list(self.query(ThinkingMsg)):
             w.mark_done()
         self._last_assistant = None
@@ -1053,6 +1134,9 @@ class RaiHttpTUIApp(App):
         widget = StepCompleteMsg(event.step_number, event.description)
         await container.mount(widget)
         self.query_one("#chat", VerticalScroll).scroll_end(animate=False)
+        self.query_one("#plan-step-panel", PlanStepPanel).step_done(
+            event.step_number, event.description
+        )
 
     async def on_step_started(self, event: StepStarted) -> None:
         if event.run_id in self._bg_run_ids:
@@ -1060,6 +1144,10 @@ class RaiHttpTUIApp(App):
         container = self.query_one("#messages", Container)
         await container.mount(StepStartMsg(event.step_number, event.description))
         self.query_one("#chat", VerticalScroll).scroll_end(animate=False)
+        panel = self.query_one("#plan-step-panel", PlanStepPanel)
+        panel.step_started(event.step_number, event.description)
+        if not panel.has_class("-visible"):
+            panel.add_class("-visible")
 
     async def on_step_blocked(self, event: StepBlocked) -> None:
         if event.run_id in self._bg_run_ids:
@@ -1067,6 +1155,24 @@ class RaiHttpTUIApp(App):
         container = self.query_one("#messages", Container)
         await container.mount(StepBlockedMsg(event.step_number, event.description, event.reason))
         self.query_one("#chat", VerticalScroll).scroll_end(animate=False)
+        self.query_one("#plan-step-panel", PlanStepPanel).step_blocked(
+            event.step_number, event.description, event.reason
+        )
+
+    async def on_step_escalated(self, event: StepEscalated) -> None:
+        if event.run_id in self._bg_run_ids:
+            return
+        panel = self.query_one("#plan-step-panel", PlanStepPanel)
+        panel.step_escalated(event.step_number, event.priority)
+
+    async def on_steps_added(self, event: StepsAdded) -> None:
+        if event.run_id in self._bg_run_ids:
+            return
+        panel = self.query_one("#plan-step-panel", PlanStepPanel)
+        for s in event.steps:
+            panel.step_added(s.get("number", 0), s.get("title", ""), s.get("priority", "normal"))
+        if not panel.has_class("-visible"):
+            panel.add_class("-visible")
 
     async def on_plan_completed(self, event: PlanCompleted) -> None:
         if event.run_id in self._bg_run_ids:
@@ -1077,6 +1183,9 @@ class RaiHttpTUIApp(App):
         container = self.query_one("#messages", Container)
         await container.mount(PlanCompletedMsg(event.total_steps))
         self.query_one("#chat", VerticalScroll).scroll_end(animate=False)
+        panel = self.query_one("#plan-step-panel", PlanStepPanel)
+        panel.clear()
+        panel.remove_class("-visible")
 
     def on_notification_arrived(self, event: NotificationArrived) -> None:
         pass
@@ -1155,12 +1264,7 @@ class RaiHttpTUIApp(App):
             # Screen dismissed — clear tracking and re-show panel if runs remain
             self._detail_screen = None
             self._detail_run_id = None
-            try:
-                panel = self.query_one("#bg-runs-panel", BackgroundRunsPanel)
-                if self._bg_run_ids or panel.count > 0:
-                    panel.show_panel()
-            except Exception:
-                pass
+            pass
 
     def _cancel_bg_slot(self, slot_id: str) -> None:
         if slot_id in self._pump_tasks:
@@ -1275,22 +1379,20 @@ class RaiHttpTUIApp(App):
     def action_background_run(self) -> None:
         panel = self.query_one("#bg-runs-panel", BackgroundRunsPanel)
         if not self._active_run_id:
-            # Show panel when bg runs or subagents are active; toggle when empty
-            if self._bg_run_ids or panel.count > 0:
-                panel.show_panel()
-            else:
-                panel.toggle()
             return
         run_id    = self._active_run_id
         thread_id = self._active_thread_id or ""
         self._bg_run_ids.add(run_id)
         self._active_run_id = None
+        if self._activity_bloom is not None:
+            if self._activity_bloom.is_mounted:
+                self._activity_bloom.remove()
+            self._activity_bloom = None
         if self._last_assistant:
             self._last_assistant.set_final()
             self._last_assistant = None
         panel.add(run_id, self._agent, thread_id=thread_id)
         panel.set_prompt(run_id, self._current_run_prompt)
-        panel.show_panel()
         self.query_one("#input-bar", InputBar).set_disabled(False)
         self.query_one("#status-bar", StatusBar).run_status = "idle"
         bg_count = len(self._bg_run_ids)
@@ -1300,7 +1402,7 @@ class RaiHttpTUIApp(App):
         self.call_after_refresh(
             container.mount,
             Static(
-                f"[dim]⧖ run [bold]{short_id}[/bold] backgrounded — ctrl+b to monitor[/dim]",
+                f"[dim]⧖ run [bold]{short_id}[/bold] backgrounded — ctrl+g to view agents[/dim]",
                 classes="sys-msg",
             ),
         )
@@ -1385,6 +1487,12 @@ class RaiHttpTUIApp(App):
                     return False
             except Exception:
                 pass
+            try:
+                pp = self.query_one("#plan-panel", PlanPanel)
+                if pp.styles.display != "none":
+                    return False
+            except Exception:
+                pass
             return True
         return True
 
@@ -1435,6 +1543,10 @@ class RaiHttpTUIApp(App):
     def action_new_thread(self) -> None:
         self._active_thread_id = str(uuid.uuid4())
         self._active_run_id = None
+        if self._activity_bloom is not None:
+            if self._activity_bloom.is_mounted:
+                self._activity_bloom.remove()
+            self._activity_bloom = None
         self._last_assistant = None
         self._current_thinking = None
         self._tool_widgets.clear()
@@ -1452,6 +1564,9 @@ class RaiHttpTUIApp(App):
             pass
         self.query_one("#header", HeaderBar).thread_id = self._active_thread_id
         self.action_clear_messages()
+        step_panel = self.query_one("#plan-step-panel", PlanStepPanel)
+        step_panel.clear()
+        step_panel.remove_class("-visible")
         self.run_worker(self._restore_banner(), exclusive=False)
         self.run_worker(self._discover_skills(), exclusive=False, name="skill_discovery")
 
@@ -1528,14 +1643,22 @@ class RaiHttpTUIApp(App):
         self.query_one("#subagent-tree", SubagentTreePanel).reset()
 
     def action_toggle_plan(self) -> None:
-        try:
-            panel = self.query_one("#plan-panel", PlanPanel)
-            if not panel.display:
-                panel.display = True
-            else:
-                panel.hide()
-        except Exception:
-            pass
+        panel = self.query_one("#plan-step-panel", PlanStepPanel)
+        is_visible = panel.has_class("-visible")
+        panel.set_class(not is_visible, "-visible")
+
+    def on_plan_step_panel_closed(self, event: PlanStepPanel.Closed) -> None:
+        self.query_one("#plan-step-panel", PlanStepPanel).remove_class("-visible")
+
+    def action_open_agents(self) -> None:
+        self.run_worker(self._do_open_agents(), exclusive=True, name="open_agents")
+
+    async def _do_open_agents(self) -> None:
+        from rai.tui.screens.agents_screen import AgentsScreen
+        screen = AgentsScreen(client=self._client, agent=self._agent)
+        self._agents_screen = screen
+        await self.push_screen_wait(screen)
+        self._agents_screen = None
 
     def action_toggle_subagents(self) -> None:
         try:
@@ -1549,7 +1672,7 @@ class RaiHttpTUIApp(App):
 
     async def _restore_banner(self) -> None:
         if self._show_banner:
-            wb = WelcomeBanner(self._agent, self._base_url, custom_markup=self._banner_markup)
+            wb = WelcomeBanner(self._agent, self._base_url, branding=self._branding, custom_markup=self._banner_markup)
             self._welcome_banner = wb
             container = self.query_one("#messages", Container)
             await container.mount(wb)

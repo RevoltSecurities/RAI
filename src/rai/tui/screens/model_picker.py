@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical, VerticalScroll
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Input, Static
@@ -174,11 +174,10 @@ class ModelPickerScreen(ModalScreen[str | None]):
         border: round $accent;
         padding: 1 2;
     }
-    ModelPickerScreen #model-title {
+    ModelPickerScreen #model-header-title {
         text-style: bold;
         color: $accent;
-        text-align: center;
-        margin-bottom: 1;
+        width: 1fr;
     }
     ModelPickerScreen #model-filter {
         border: round $accent 40%;
@@ -214,6 +213,19 @@ class ModelPickerScreen(ModalScreen[str | None]):
     ModelPickerScreen .model-row-selected {
         background: $accent 30%;
     }
+    ModelPickerScreen #model-header {
+        height: 1;
+        margin-bottom: 1;
+    }
+    ModelPickerScreen #model-header-title {
+        width: 1fr;
+    }
+    ModelPickerScreen #model-close {
+        width: 3;
+        text-align: right;
+        color: $error;
+        text-style: bold;
+    }
     ModelPickerScreen #model-help {
         height: 1;
         color: $text-muted;
@@ -229,7 +241,6 @@ class ModelPickerScreen(ModalScreen[str | None]):
         Binding("pagedown", "page_down",     "PgDn",     show=False, priority=True),
         Binding("tab",      "tab_complete",  "Complete", show=False, priority=True),
         Binding("enter",    "select_model",  "Select",   show=False, priority=True),
-        Binding("escape",   "cancel",        "Cancel",   show=False),
     ]
 
     def __init__(self, current_override: str | None = None, **kwargs) -> None:
@@ -243,13 +254,15 @@ class ModelPickerScreen(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            if self._current_override:
-                yield Static(
-                    f"Select Model  [dim]override: [yellow]{self._current_override}[/yellow][/dim]",
-                    id="model-title",
-                )
-            else:
-                yield Static("Select Model", id="model-title")
+            with Horizontal(id="model-header"):
+                if self._current_override:
+                    yield Static(
+                        f"Select Model  [dim]override: [yellow]{self._current_override}[/yellow][/dim]",
+                        id="model-header-title",
+                    )
+                else:
+                    yield Static("Select Model", id="model-header-title")
+                yield Static("[bold red]\\[x][/bold red]", id="model-close")
             yield Input(
                 placeholder="Type to filter or enter provider:model…",
                 id="model-filter",
@@ -258,7 +271,7 @@ class ModelPickerScreen(ModalScreen[str | None]):
                 self._options_container = Container(id="model-options")
                 yield self._options_container
             yield Static(
-                "↑↓ navigate  ·  enter select  ·  tab copy spec  ·  esc cancel",
+                "↑↓ navigate  ·  enter select  ·  tab copy spec",
                 id="model-help",
             )
             yield Footer()
@@ -410,6 +423,10 @@ class ModelPickerScreen(ModalScreen[str | None]):
             self.dismiss(val)
             return
         self.dismiss(None)
+
+    def on_click(self, event) -> None:
+        if getattr(event.widget, "id", None) == "model-close":
+            self.dismiss(None)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
