@@ -250,6 +250,23 @@ class StepBlocked(Message):
         self.reason = reason
 
 
+class StepEscalated(Message):
+    def __init__(self, run_id: str, step_number: int, priority: str = "", reason: str = "") -> None:
+        super().__init__()
+        self.run_id = run_id
+        self.step_number = step_number
+        self.priority = priority
+        self.reason = reason
+
+
+class StepsAdded(Message):
+    def __init__(self, run_id: str, steps: list[dict] | None = None, reason: str = "") -> None:
+        super().__init__()
+        self.run_id = run_id
+        self.steps = steps or []
+        self.reason = reason
+
+
 class PlanCompleted(Message):
     def __init__(self, run_id: str, total_steps: int = 0) -> None:
         super().__init__()
@@ -295,8 +312,10 @@ class SSEEventPump:
             PlanApprovedEvent,
             PlanRejectedEvent,
             StepCompleteEvent,
+            StepEscalatedEvent,
             StepStartEvent,
             StepBlockedEvent,
+            StepsAddedEvent,
             SubagentStartedEvent,
             SubagentTokenEvent,
             SubagentThinkingEvent,
@@ -336,9 +355,17 @@ class SSEEventPump:
                         app.post_message(ToolStarted(run_id, ev.tool_name or "", ev.tool_input or {}))
 
                     case ToolEndEvent():
-                        app.post_message(
-                            ToolFinished(run_id, ev.tool_name or "", ev.tool_output, getattr(ev, "tool_use_id", ""))
-                        )
+                        # AllowedToolsMiddleware returns a ToolMessage(status="error")
+                        # whose content starts with "Tool '…' is not permitted".
+                        # Detect this pattern and route it to the denial UI path so
+                        # the tool widget shows denied instead of staying "running".
+                        _output = ev.tool_output or ""
+                        if "is not permitted" in _output and "Allowed tools:" in _output:
+                            app.post_message(PermissionDenied(run_id, ev.tool_name or "", _output))
+                        else:
+                            app.post_message(
+                                ToolFinished(run_id, ev.tool_name or "", _output, getattr(ev, "tool_use_id", ""))
+                            )
 
                     case PermissionDeniedEvent():
                         app.post_message(PermissionDenied(run_id, ev.tool_name or "", getattr(ev, "reason", "")))
@@ -416,6 +443,25 @@ class SSEEventPump:
                                 run_id,
                                 getattr(ev, "step_number", 0) or 0,
                                 getattr(ev, "description", "") or "",
+                                getattr(ev, "reason", "") or "",
+                            )
+                        )
+
+                    case StepEscalatedEvent():
+                        app.post_message(
+                            StepEscalated(
+                                run_id,
+                                getattr(ev, "step_number", 0) or 0,
+                                getattr(ev, "priority", "") or "",
+                                getattr(ev, "reason", "") or "",
+                            )
+                        )
+
+                    case StepsAddedEvent():
+                        app.post_message(
+                            StepsAdded(
+                                run_id,
+                                getattr(ev, "steps", []) or [],
                                 getattr(ev, "reason", "") or "",
                             )
                         )

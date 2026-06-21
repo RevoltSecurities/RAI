@@ -57,7 +57,7 @@ class RunDetailResponse(BaseModel):
     ttft_ms: float | None = None
     usage: UsageInfo | None = None
     model_usage: dict[str, Any] | None = None  # per-model token breakdown
-    total_cost_usd: float | None = None         # always null (cost calc not implemented)
+    total_cost_usd: float | None = None
 
 
 class TaskResponse(BaseModel):

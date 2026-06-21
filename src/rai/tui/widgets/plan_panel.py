@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Button, Markdown, Static, TextArea
@@ -16,6 +18,7 @@ if TYPE_CHECKING:
 
 class PlanPanel(Widget):
     can_focus = True
+    can_focus_children = True
 
     DEFAULT_CSS = """
     PlanPanel {
@@ -26,20 +29,28 @@ class PlanPanel(Widget):
         border: round $warning 70%;
         padding: 1 2;
     }
+    PlanPanel:focus-within {
+        border: round $warning;
+    }
     #plan-title {
         color: $warning;
         text-style: bold;
         margin-bottom: 1;
+        text-align: center;
     }
     #plan-content {
         height: auto;
         max-height: 20;
         overflow-y: auto;
     }
-    #plan-actions {
+    #plan-buttons {
         height: 3;
-        layout: horizontal;
+        align: center middle;
         margin-top: 1;
+    }
+    #plan-buttons Button {
+        margin: 0 1;
+        min-width: 12;
     }
     #plan-feedback {
         display: none;
@@ -47,14 +58,19 @@ class PlanPanel(Widget):
         border: round $warning 50%;
         margin-top: 1;
     }
+    #plan-bindings {
+        color: $text-muted;
+        text-align: center;
+        height: 1;
+    }
     """
 
     BINDINGS = [
-        Binding("a", "approve", "Approve", show=True),
-        Binding("r", "reject", "Reject", show=True),
-        Binding("e", "edit", "Edit", show=True),
-        Binding("p", "respond", "Respond", show=True),
-        Binding("escape", "dismiss", "Dismiss", show=True),
+        Binding("a", "approve", "Approve", show=False),
+        Binding("r", "reject", "Reject", show=False),
+        Binding("e", "edit", "Edit", show=False),
+        Binding("p", "respond", "Respond", show=False),
+        Binding("escape", "dismiss", "Dismiss", show=False),
         Binding("ctrl+s", "submit_feedback", "Submit", show=False),
     ]
 
@@ -73,13 +89,18 @@ class PlanPanel(Widget):
         self._mode = "idle"  # idle | reject | edit | respond
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            "◈ [bold]PLAN READY[/bold]  "
-            "[dim]\\[a]pprove  \\[r]eject  \\[e]dit  \\[p]respond  \\[esc] dismiss[/dim]",
-            id="plan-title",
-        )
+        yield Static("◈ [bold]PLAN READY[/bold]", id="plan-title")
         yield Markdown("", id="plan-content")
         yield TextArea("", id="plan-feedback", language="markdown")
+        with Horizontal(id="plan-buttons"):
+            yield Button("✓ Approve", id="plan-btn-approve", variant="success")
+            yield Button("✗ Reject", id="plan-btn-reject", variant="error")
+            yield Button("✎ Edit", id="plan-btn-edit", variant="warning")
+            yield Button("↩ Respond", id="plan-btn-respond", variant="default")
+        yield Static(
+            "[dim]a approve  r reject  e edit  p respond  ctrl+s submit  esc dismiss[/dim]",
+            id="plan-bindings",
+        )
 
     def show(self, plan_text: str, run_id: str, agent: str = "") -> None:
         self._run_id = run_id
@@ -105,6 +126,26 @@ class PlanPanel(Widget):
         except Exception:
             pass
         self.styles.display = "none"
+
+    @on(Button.Pressed, "#plan-btn-approve")
+    def _btn_approve(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_approve()
+
+    @on(Button.Pressed, "#plan-btn-reject")
+    def _btn_reject(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_reject()
+
+    @on(Button.Pressed, "#plan-btn-edit")
+    def _btn_edit(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_edit()
+
+    @on(Button.Pressed, "#plan-btn-respond")
+    def _btn_respond(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_respond()
 
     def action_approve(self) -> None:
         self.post_message(self.Decision(self._run_id, "approve"))

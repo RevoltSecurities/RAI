@@ -1,4 +1,4 @@
-"""WelcomeBanner — Metasploit-style startup banner with ANSI Shadow wordmark."""
+"""WelcomeBanner — Metasploit-style startup banner with configurable branding."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import Static
 
-
+from rai.tui.branding import BrandingConfig, RAI_BRANDING
 
 
 def _escape(text: str) -> str:
@@ -54,27 +54,17 @@ def _age_label(ts: float | None) -> str:
     return f"{int(diff // 86400)}d ago"
 
 
-_RAI_ICON = (
-    "[bold $accent]    ▲   ▲[/bold $accent]\n"
-    "[bold $accent]  ╭───────╮[/bold $accent]\n"
-    "[bold $accent]▝▜│ ██ ██ │▛▘  RAI * Your CyberSecurity AI Assistant[/bold $accent]\n"
-    "[bold $accent]  ╰───────╯[/bold $accent]\n"
-    "[bold $accent]    ▘▘ ▝▝  [/bold $accent]\n"
-)
-
-
 class WelcomeBanner(Widget):
-    """Metasploit-style welcome banner with ANSI Shadow RAI wordmark.
+    """Configurable welcome banner with branding support.
 
     Parameters
     ----------
-    agent:          Agent name shown in info rows (default banner only).
-    server:         Server URL shown in info rows (default banner only).
-    custom_markup:  Rich markup string that replaces the RAI branding block.
-                    When set, the markup is rendered verbatim at the top of the
-                    banner and the RAI icon / info rows are skipped.
-                    Recent-threads and tips footer are still shown below it.
-                    Pass ``None`` (default) to use the built-in RAI banner.
+    agent:    Agent name shown in info rows.
+    server:   Server URL shown in info rows.
+    branding: BrandingConfig instance for white-labeling. None = RAI default.
+    custom_markup: Legacy — Rich markup that replaces the branding block.
+                   Deprecated in favor of BrandingConfig. Still supported for
+                   backward compatibility.
     """
 
     DEFAULT_CSS = """
@@ -90,15 +80,17 @@ class WelcomeBanner(Widget):
         self,
         agent: str,
         server: str,
+        branding: BrandingConfig | None = None,
         custom_markup: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
-        self._agent         = agent
-        self._server        = server
+        self._agent = agent
+        self._server = server
+        self._branding = branding or RAI_BRANDING
         self._custom_markup = custom_markup
-        self._ver           = _version()
-        self._user          = _username()
+        self._ver = _version()
+        self._user = _username()
         self._recent: list[dict] = []
 
     def compose(self) -> ComposeResult:
@@ -108,29 +100,39 @@ class WelcomeBanner(Widget):
         self._update_content()
 
     def _update_content(self) -> None:
-        ver    = _escape(self._ver)
-        user   = _escape(self._user)
-        agent  = _escape(self._agent)
+        brand = self._branding
+        ver = _escape(self._ver)
+        user = _escape(self._user)
+        agent = _escape(self._agent)
         server = _escape(self._server)
-        cwd    = _escape(_short_path(os.getcwd()))
+        cwd = _escape(_short_path(os.getcwd()))
 
         lines: list[str] = []
 
         if self._custom_markup:
-            # SDK custom banner: render user-supplied Rich markup verbatim.
+            # Legacy: render user-supplied Rich markup verbatim.
             lines.append(self._custom_markup)
             lines.append("")
         else:
-            # Default RAI branding block.
-            lines.append(_RAI_ICON)
-            lines.append(f"[dim]v{ver}[/dim]")
+            # Branding block
+            lines.append(brand.icon)
+            subtitle = f"  {_escape(brand.subtitle)}" if brand.subtitle else ""
+            lines.append(f"[dim]v{ver}[/dim]{subtitle}")
             lines.append("")
 
-            # Metasploit-style info rows — prefix and value on same line, no split tags
-            lines.append("[dim]+ -- --=[/dim]  [bold $accent]Revolt AI[/bold $accent]  [dim]── ──+[/dim]")
+            # Info rows
+            title = _escape(brand.title)
+            lines.append(f"[dim]+ -- --=[/dim]  [bold $accent]{title}[/bold $accent]  [dim]── ──+[/dim]")
             lines.append(f"[dim]+ -- --=[/dim]  [dim]agent  :[/dim]  [cyan]{agent}[/cyan]")
             lines.append(f"[dim]+ -- --=[/dim]  [dim]server :[/dim]  [dim]{server}[/dim]")
             lines.append(f"[dim]+ -- --=[/dim]  [dim]cwd    :[/dim]  [dim]{cwd}[/dim]")
+
+            # Custom extra rows
+            for label, value in brand.info_rows:
+                lbl = _escape(label)
+                val = _escape(value)
+                lines.append(f"[dim]+ -- --=[/dim]  [dim]{lbl:<7}:[/dim]  [dim]{val}[/dim]")
+
             lines.append(f"[dim]+ -- --=[/dim]  [bold]Welcome back {user}![/bold]")
 
         # Recent activity
@@ -149,12 +151,7 @@ class WelcomeBanner(Widget):
 
         # Tips footer
         lines.append("")
-        lines.append(
-            "[dim]/new[/dim] new thread  "
-            "[dim]·[/dim]  [dim]/threads[/dim] browse  "
-            "[dim]·[/dim]  [dim]ctrl+b[/dim] bg runs  "
-            "[dim]·[/dim]  [dim]ctrl+t[/dim] theme"
-        )
+        lines.append(brand.tips)
 
         try:
             self.query_one("#wb-content", Static).update("\n".join(lines))

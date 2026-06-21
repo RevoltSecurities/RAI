@@ -18,13 +18,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from rai import DEFAULT_MODEL, AsyncSubAgent
 from rai.sdk import (
     RAIAgentBuilder,
+    AsyncSubAgent,
     FindingsExportTool,
     get_security_tools,
     get_builtin_tools,
     init_findings_store,
+    DEFAULT_MODEL,
 )
 
 COORDINATOR_PROMPT = """\

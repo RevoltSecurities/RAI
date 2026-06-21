@@ -38,6 +38,7 @@ class RunContext(TypedDict):
     checkpointer: Any
     parent_api_key: str    # fallback for subagents that have no own api_key
     parent_base_url: str   # fallback for subagents that have no own base_url
+    parent_model: str      # fallback for subagents that have no own model
     agent_name: str        # parent agent's own name — used by list_available_agents
 
 

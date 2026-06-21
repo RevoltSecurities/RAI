@@ -344,6 +344,7 @@ def chat(
     verbose: VerboseOpt = False,
     resume: Annotated[Optional[str], typer.Option("--resume", "-r", help="Resume a session by thread ID")] = None,
     cont: Annotated[bool, typer.Option("--continue", "-c", help="Continue the most recent session for this agent")] = False,
+    docker: Annotated[Optional[str], typer.Option("--docker", help="Route bash to a Docker container — pass image name (e.g. kalilinux/kali-rolling)")] = None,
 ) -> None:
     """Start an interactive chat — local by default, or remote with --remote-url.
 
@@ -352,6 +353,10 @@ def chat(
     remote server requires X-API-Key authentication.
     """
     _bootstrap(verbose)
+
+    if docker:
+        os.environ["RAI_DOCKER_ENV"] = "1"
+        os.environ["RAI_DOCKER_IMAGE"] = docker
 
     from rai.sessions.store import generate_thread_id, get_most_recent_sync
 
@@ -1053,6 +1058,136 @@ def serve(
 
 from rai.cli.http_server import http_app  # noqa: E402
 app.add_typer(http_app, name="http")
+
+
+# ---------------------------------------------------------------------------
+# rai claude — TUI + auto-started claude-serve subprocess
+# ---------------------------------------------------------------------------
+
+
+@app.command("claude")
+def claude_tui_cmd(
+    agent: str = typer.Option("rai", "--agent", "-a", help="Agent name"),
+    port: int = typer.Option(8001, "--port", help="Server port"),
+    host: str = typer.Option("127.0.0.1", "--host", help="Server host"),
+    model: Annotated[Optional[str], typer.Option("--model", "-m", help="Model override")] = None,
+    api_key: Annotated[Optional[str], typer.Option("--api-key", help="Optional Bearer token")] = None,
+    no_hitl: bool = typer.Option(False, "--no-hitl", help="Disable HITL (autonomous)"),
+    no_subagents: bool = typer.Option(False, "--no-subagents", help="Skip loading subagents from ~/.rai/agents/"),
+    theme: str = typer.Option("github-dark", "--theme", help="TUI theme (rai, github-dark, glass, claude)"),
+    url: Annotated[Optional[str], typer.Option("--url", help="Connect to remote rai claude-serve (skip local server launch)")] = None,
+) -> None:
+    """Launch the Claude TUI — starts server + interactive terminal UI.
+
+    Starts `rai claude-serve` as a background process, waits for it to become
+    ready, then launches the Textual TUI. On exit the server is stopped.
+
+    Use --url to connect to a remote server instead of starting a local one:
+      rai claude --url http://10.0.0.5:8001 --api-key secret
+    """
+    import subprocess
+    import time
+
+    import httpx
+
+    from rai.tui.claude_tui import ClaudeTUIApp
+
+    # Remote mode: connect to existing server, skip local spawn
+    if url:
+        ready = False
+        try:
+            if httpx.get(f"{url}/ok", timeout=3).status_code == 200:
+                ready = True
+        except Exception:
+            pass
+        if not ready:
+            typer.secho(f"Cannot reach remote server at {url}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+        typer.secho(f"Connected to remote: {url}", fg=typer.colors.GREEN, err=True)
+        ClaudeTUIApp(
+            url,
+            api_key=api_key or "",
+            initial_theme=theme,
+        ).run()
+        return
+
+    # Local mode: spawn claude-serve subprocess
+    cmd = [sys.executable, "-m", "rai.cli.main", "claude-serve",
+           "--agent", agent, "--port", str(port), "--host", host]
+    if api_key:
+        cmd.extend(["--api-key", api_key])
+    if no_hitl:
+        cmd.append("--no-hitl")
+    if no_subagents:
+        cmd.append("--no-subagents")
+
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+
+    base_url = f"http://{host}:{port}"
+    ready = False
+    for _ in range(40):
+        try:
+            if httpx.get(f"{base_url}/ok", timeout=0.5).status_code == 200:
+                ready = True
+                break
+        except Exception:
+            pass
+        time.sleep(0.25)
+
+    if not ready:
+        typer.secho("Server did not start in time.", fg=typer.colors.RED, err=True)
+        proc.terminate()
+        proc.wait(timeout=5)
+        raise typer.Exit(1)
+
+    try:
+        ClaudeTUIApp(
+            base_url,
+            api_key=api_key or "",
+            initial_theme=theme,
+        ).run()
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+# ---------------------------------------------------------------------------
+# rai claude-serve — FastAPI SSE proxy (Claude SDK, no API key)
+# ---------------------------------------------------------------------------
+
+
+@app.command("claude-serve")
+def claude_serve_cmd(
+    agent: str = typer.Option("rai", "--agent", "-a", help="Default agent name"),
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host"),
+    port: int = typer.Option(8001, "--port", help="HTTP port"),
+    api_key: str = typer.Option(None, "--api-key", help="Optional Bearer token for auth"),
+    no_hitl: bool = typer.Option(False, "--no-hitl", help="Disable HITL (run autonomously)"),
+    no_subagents: bool = typer.Option(False, "--no-subagents", help="Skip loading subagents from ~/.rai/agents/"),
+) -> None:
+    """Launch FastAPI SSE server for the Claude SDK agent.
+
+    POST /chat  → text/event-stream  (connect React UI here)
+    GET  /ok    → health check
+    GET  /sessions → list past Claude sessions
+    GET  /sessions/{id}/messages → session message history
+    """
+    import os
+
+    import uvicorn  # noqa: PLC0415
+
+    os.environ["RAI_CLAUDE_AGENT"]  = agent
+    os.environ["RAI_CLAUDE_HITL"]   = "0" if no_hitl else "1"
+    if api_key:
+        os.environ["RAI_CLAUDE_API_KEY"] = api_key
+    if no_subagents:
+        os.environ["RAI_CLAUDE_NO_SUBAGENTS"] = "1"
+    uvicorn.run("rai.cli.claude_server:app", host=host, port=port, reload=False)
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ __pycache__/
 .codex/
 .codex
 .claude/
+samples/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

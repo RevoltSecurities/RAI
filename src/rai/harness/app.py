@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Any, TYPE_CHECKING
 
@@ -100,15 +102,22 @@ class AgentPool:
         if builder is None:
             raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
 
-        from rai.harness.subagents.tools import get_http_subagent_tools
+        from rai.harness.plan.tools import get_plan_tools
+        from rai.harness.subagents_v2 import build_subagent_tools, build_subagent_system_section
+        from rai.agents.loader import load_subagents_for
+        _subagent_specs = load_subagents_for(builder._agent_name) if not builder._disable_subagents else []
+        _http_tools = build_subagent_tools(_subagent_specs) + get_plan_tools() if _subagent_specs else get_plan_tools()
+        _extra_prompt = builder._system_prompt_extra or ""
+        if _subagent_specs:
+            _extra_prompt = (_extra_prompt + "\n\n" + build_subagent_system_section(_subagent_specs)).strip()
         graph, _ = create_rai_agent(
             model=model,
             agent_name=builder._agent_name,
             system_prompt=builder._system_prompt,
-            system_prompt_extra=builder._system_prompt_extra,
+            system_prompt_extra=_extra_prompt,
             disable_native_tools=not builder._enable_native_tools,
             disable_subagents=builder._disable_subagents,
-            extra_tools=get_http_subagent_tools(),
+            extra_tools=_http_tools,
             checkpointer=checkpointer,
             interactive=False,
             auto_approve=builder._auto_approve,
@@ -140,14 +149,20 @@ class AgentPool:
 
         try:
             # Suppress LocalAsyncAgentMiddleware so its deepagents tool names
-            # (start_agent_task, check_agent_task, etc.) don't shadow the HTTP
-            # subagent tools which use the same names with better capabilities.
+            # (start_agent_task, check_agent_task, etc.) don't shadow the v2 tools.
             builder = builder.without_local_async()
             builder = builder.without_opplan()
-            # Inject HTTP subagent tools — same names as deepagents tools so the
-            # LLM needs no relearning. _RUN_CONTEXT supplies per-run context.
-            from rai.harness.subagents.tools import get_http_subagent_tools
-            builder = builder.add_tools(get_http_subagent_tools())
+            # Inject v2 subagent tools + plan tools
+            from rai.harness.plan.tools import get_plan_tools
+            from rai.harness.subagents_v2 import build_subagent_tools, build_subagent_system_section
+            from rai.agents.loader import load_subagents_for
+            _sub_specs = load_subagents_for(builder._agent_name) if not builder._disable_subagents else []
+            _graph_tools = build_subagent_tools(_sub_specs) + get_plan_tools() if _sub_specs else get_plan_tools()
+            builder = builder.add_tools(_graph_tools)
+            if _sub_specs:
+                builder = builder.system_prompt_extra(
+                    (builder._system_prompt_extra or "") + "\n\n" + build_subagent_system_section(_sub_specs)
+                )
 
             # build() is async — await the coroutine to get a RunableAgent
             runnable = await builder.build()
@@ -203,8 +218,15 @@ def create_app(pool: AgentPool, config: HTTPConfig) -> FastAPI:
         from rai.sessions.store import get_checkpointer
         from rai.sessions.tasks import get_task_store
         from rai.harness.subagents.registry import set_task_store
+        from rai.harness.subagents_v2 import SubagentService
+        if not config.api_key:
+            logger.warning(
+                "RAI HTTP server is running WITHOUT an API key — all endpoints are publicly accessible. "
+                "Pass --server-key <secret> to require authentication."
+            )
         async with get_checkpointer() as cp, get_task_store() as task_store:
             set_task_store(task_store)
+            SubagentService.initialize(checkpointer=cp, task_store=task_store)
             pool.set_checkpointer(cp)
             app.state.pool = pool
             app.state.config = config
@@ -226,9 +248,23 @@ def create_app(pool: AgentPool, config: HTTPConfig) -> FastAPI:
                 await recover_incomplete_subagents(cp)
             except Exception as exc:
                 logger.warning("Subagent recovery scan failed: %s", exc)
+
+            # Docker container lifecycle — only if both env flag AND image are set
+            _docker_active = (
+                os.environ.get("RAI_DOCKER_ENV", "0") == "1"
+                and bool(os.environ.get("RAI_DOCKER_IMAGE", ""))
+            )
+            if _docker_active:
+                from rai.middleware.docker_router import DockerRouterMiddleware
+                await asyncio.to_thread(DockerRouterMiddleware.ensure_container_global)
+                logger.info("Docker routing enabled — container ready")
+
             try:
                 yield
             finally:
+                if _docker_active:
+                    from rai.middleware.docker_router import DockerRouterMiddleware as _DRM
+                    await asyncio.to_thread(_DRM.stop_container_global)
                 # Explicit cleanup in the SAME task as compilation — no cancel scope violations.
                 set_task_store(None)
                 await pool.cleanup()
@@ -254,7 +290,7 @@ def create_app(pool: AgentPool, config: HTTPConfig) -> FastAPI:
     if config.api_key:
         @app.middleware("http")
         async def _api_key_guard(request: Request, call_next):
-            if request.url.path in ("/ok", "/docs", "/openapi.json", "/redoc"):
+            if request.url.path == "/ok":
                 return await call_next(request)
             key = request.headers.get("X-API-Key", "")
             if key != config.api_key:
@@ -276,6 +312,7 @@ def create_app(pool: AgentPool, config: HTTPConfig) -> FastAPI:
     from rai.harness.routes.hitl import router as hitl_router
     from rai.harness.routes.notifications import router as notif_router
     from rai.harness.subagents.routes import router as subagents_router
+    from rai.harness.subagents_v2.routes import router as subagents_v2_router
 
     app.include_router(system_router)
     app.include_router(runtime_router)  # /agents/runtime/... before /agents/{name}/...
@@ -287,5 +324,6 @@ def create_app(pool: AgentPool, config: HTTPConfig) -> FastAPI:
     app.include_router(hitl_router)
     app.include_router(notif_router)
     app.include_router(subagents_router)
+    app.include_router(subagents_v2_router)
 
     return app

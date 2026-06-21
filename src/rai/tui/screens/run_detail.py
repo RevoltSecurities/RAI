@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Container, VerticalScroll
+from textual.containers import Container, Horizontal, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
@@ -30,9 +30,8 @@ class RunDetailScreen(ModalScreen[None]):
     """Full-screen live detail view of a background run."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("escape", "dismiss",  show=False),
         Binding("left",   "dismiss",  show=False),
-        Binding("x",      "stop_run", "Stop", show=True),
+        Binding("x",      "stop_run", "Stop", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -51,6 +50,16 @@ class RunDetailScreen(ModalScreen[None]):
         height: 1;
         padding: 0 2;
         background: $surface 80%;
+        layout: horizontal;
+    }
+    RunDetailScreen #detail-header-text {
+        width: 1fr;
+    }
+    RunDetailScreen #detail-close {
+        width: 3;
+        text-align: right;
+        color: $error;
+        text-style: bold;
     }
     RunDetailScreen #detail-chat {
         height: 1fr;
@@ -129,7 +138,9 @@ class RunDetailScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Container(id="detail-shell"):
-            yield Static("", id="detail-header")
+            with Horizontal(id="detail-header"):
+                yield Static("", id="detail-header-text")
+                yield Static("[bold red]\\[x][/bold red]", id="detail-close")
             with VerticalScroll(id="detail-chat"):
                 yield Container(id="detail-messages")
             with Container(id="detail-input-area"):
@@ -138,7 +149,7 @@ class RunDetailScreen(ModalScreen[None]):
                     id="detail-input",
                 )
             yield Static(
-                "[dim]esc / ← close[/dim]  [dim]·[/dim]  [dim]x stop[/dim]  "
+                "[dim]← close[/dim]  [dim]·[/dim]  [dim]x stop[/dim]  "
                 "[dim]·[/dim]  [dim]enter send  (stays in bg thread)[/dim]",
                 id="detail-footer",
             )
@@ -166,7 +177,7 @@ class RunDetailScreen(ModalScreen[None]):
         }.get(entry.status, "[dim]●[/dim]")
         short = (entry.prompt[:55] + "…") if len(entry.prompt) > 55 else entry.prompt
         try:
-            self.query_one("#detail-header", Static).update(
+            self.query_one("#detail-header-text", Static).update(
                 f"  {status_glyph} [bold $accent]{_escape(entry.agent)}[/bold $accent]"
                 f"  [dim]{_escape(short)}[/dim]"
                 f"  [dim]{elapsed}s · {tokens_str} tok[/dim]"
@@ -316,6 +327,10 @@ class RunDetailScreen(ModalScreen[None]):
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
+
+    def on_click(self, event) -> None:
+        if getattr(event.widget, "id", None) == "detail-close":
+            self.dismiss()
 
     def action_stop_run(self) -> None:
         self.post_message(self.Stop(self._run_id))

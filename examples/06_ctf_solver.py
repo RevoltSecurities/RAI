@@ -18,13 +18,14 @@ import argparse
 import asyncio
 import re
 
-from rai import DEFAULT_MODEL, AsyncSubAgent
 from rai.sdk import (
     RAIAgentBuilder,
+    AsyncSubAgent,
     get_builtin_tools,
     get_reversing_tools,
     get_security_tools,
     get_web_tools,
+    DEFAULT_MODEL,
 )
 
 COORDINATOR_PROMPT = """\

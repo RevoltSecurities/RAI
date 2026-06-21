@@ -5,11 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Container
+from textual.containers import Container, Horizontal
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Label
+from textual.widgets import DataTable, Footer, Label, Static
 
 
 class RunsBrowserScreen(ModalScreen):
@@ -24,14 +23,23 @@ class RunsBrowserScreen(ModalScreen):
         border: round $accent;
         padding: 1 2;
     }
+    #runs-header {
+        height: 1;
+        margin-bottom: 1;
+    }
+    #runs-header-title {
+        width: 1fr;
+    }
+    #runs-close {
+        width: 3;
+        text-align: right;
+        color: $error;
+        text-style: bold;
+    }
     #runs-modal-shell DataTable {
         height: 1fr;
     }
     """
-
-    BINDINGS = [
-        Binding("escape", "dismiss", "Close"),
-    ]
 
     class RunSelected(Message):
         def __init__(self, run_id: str, agent: str, status: str) -> None:
@@ -46,7 +54,9 @@ class RunsBrowserScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Container(id="runs-modal-shell"):
-            yield Label("Runs Browser  [dim][enter] attach  [esc] close[/dim]")
+            with Horizontal(id="runs-header"):
+                yield Label("Runs Browser  [dim][enter] attach[/dim]", id="runs-header-title")
+                yield Static("[bold red]\\[x][/bold red]", id="runs-close")
             table = DataTable(cursor_type="row", id="runs-table")
             table.add_columns("run_id", "agent", "status", "duration", "created")
             for run in self._runs:
@@ -75,6 +85,10 @@ class RunsBrowserScreen(ModalScreen):
                 )
                 return
         self.dismiss(None)
+
+    def on_click(self, event) -> None:
+        if getattr(event.widget, "id", None) == "runs-close":
+            self.dismiss(None)
 
     def action_dismiss(self) -> None:
         self.dismiss(None)

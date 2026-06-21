@@ -80,6 +80,7 @@ def load_subagents_for(
     *,
     parent_api_key: str = "",
     parent_base_url: str = "",
+    parent_model: str = "",
 ) -> list[dict]:
     """Load subagents by scanning ``~/.rai/agents/`` for individual AGENTS.md files.
 
@@ -125,7 +126,7 @@ def load_subagents_for(
         )
         result.append(to_deepagents_subagent(
             entry,
-            parent_model="",
+            parent_model=parent_model,
             parent_api_key=parent_api_key,
             parent_base_url=parent_base_url,
         ))

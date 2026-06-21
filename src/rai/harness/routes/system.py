@@ -8,7 +8,7 @@ from rai import __version__
 from rai.harness.models import StatsResponse
 from rai.harness.runner import _RUN_REGISTRY
 from rai.harness.tasks import get_all_live_tasks
-from rai.sessions.store import list_threads_sync
+from rai.sessions.store import list_threads_async
 
 router = APIRouter(tags=["system"])
 
@@ -26,7 +26,7 @@ async def stats(request: Request) -> StatsResponse:
     )
     live_tasks = len(get_all_live_tasks())
     agents = pool.agent_names()
-    total_threads = len(list_threads_sync(limit=10000))
+    total_threads = len(await list_threads_async(limit=10000))
     return StatsResponse(
         active_runs=active_runs,
         live_tasks=live_tasks,

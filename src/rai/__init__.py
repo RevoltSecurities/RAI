@@ -1,5 +1,5 @@
 """RAI — the open-source AI security operator for the full cybersecurity spectrum: threat modeling, SAST, pentesting, red team, bug bounty, VAPT, and SOC operations."""
-__version__ = "2.0.2"
+__version__ = "2.1.0"
 
 # langchain_core's surface_langchain_deprecation_warnings() inserts a "default"
 # filter at position 0 when it is first imported, pushing any earlier "ignore"
@@ -47,6 +47,45 @@ try:
 except ImportError:
     pass
 
+# ---- Claude SDK (no API key — uses Claude Code subscription) ---------------
+try:
+    from rai.engine.claude_sdk import (
+        ClaudeAgent,
+        ClaudeAgentBuilder,
+        ClaudeAgentRegistry,
+        RunnableClaudeAgent,
+        RunResult,
+        build_claude_options,
+        build_default_hooks,
+        load_claude_subagents,
+        ClaudeSessionManager,
+        ForkSessionResult,
+        SDKSessionInfo,
+        SessionMessage,
+    )
+    from claude_agent_sdk.types import (
+        AgentDefinition,
+        HookMatcher,
+        ClaudeAgentOptions,
+        AssistantMessage,
+        ResultMessage,
+        StreamEvent,
+        TextBlock,
+        ThinkingBlock,
+        ToolUseBlock,
+        TaskStartedMessage,
+        TaskProgressMessage,
+        TaskNotificationMessage,
+    )
+    _CLAUDE_SDK_AVAILABLE = True
+except ImportError:
+    _CLAUDE_SDK_AVAILABLE = False
+
+try:
+    from rai.client.claude import ClaudeServeClient, ClaudeServeConfig
+except ImportError:
+    pass
+
 __all__ = [
     # ---- Agent factory ----
     "create_rai_agent",
@@ -72,4 +111,34 @@ __all__ = [
     "list_providers",
     # ---- Middleware ----
     "RAIPromptCachingMiddleware",
+    # ---- Claude SDK (no API key) ----
+    "ClaudeAgent",
+    "ClaudeAgentBuilder",
+    "ClaudeAgentRegistry",
+    "RunnableClaudeAgent",
+    "RunResult",
+    "build_claude_options",
+    "build_default_hooks",
+    "load_claude_subagents",
+    # Session management
+    "ClaudeSessionManager",
+    "ForkSessionResult",
+    "SDKSessionInfo",
+    "SessionMessage",
+    # claude-agent-sdk primitive types
+    "AgentDefinition",
+    "HookMatcher",
+    "ClaudeAgentOptions",
+    "AssistantMessage",
+    "ResultMessage",
+    "StreamEvent",
+    "TextBlock",
+    "ThinkingBlock",
+    "ToolUseBlock",
+    "TaskStartedMessage",
+    "TaskProgressMessage",
+    "TaskNotificationMessage",
+    # Claude Serve client
+    "ClaudeServeClient",
+    "ClaudeServeConfig",
 ]

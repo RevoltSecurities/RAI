@@ -6,7 +6,7 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical, VerticalScroll
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Label, Static
 
@@ -26,11 +26,21 @@ class MCPViewerScreen(ModalScreen):
         border: round $accent;
         padding: 1 2;
     }
+    MCPViewerScreen #mcp-header {
+        height: auto;
+        margin-bottom: 1;
+    }
     MCPViewerScreen #mcp-title {
         color: $accent;
         text-style: bold;
-        margin-bottom: 1;
+        width: 1fr;
         height: auto;
+    }
+    MCPViewerScreen #mcp-close {
+        width: 3;
+        text-align: right;
+        color: $error;
+        text-style: bold;
     }
     MCPViewerScreen .mcp-scroll {
         height: 1fr;
@@ -65,7 +75,6 @@ class MCPViewerScreen(ModalScreen):
     """
 
     BINDINGS = [
-        Binding("escape",   "dismiss_screen", "Close"),
         Binding("q",        "dismiss_screen", "Close",    show=False),
         Binding("up",       "scroll_up",      "Up",       show=False, priority=True),
         Binding("down",     "scroll_down",    "Down",     show=False, priority=True),
@@ -86,17 +95,19 @@ class MCPViewerScreen(ModalScreen):
         n = len(self._server_infos)
 
         with Vertical():
-            yield Label(
-                f"[bold]MCP Servers[/bold]  "
-                f"[dim]{n} server{'s' if n != 1 else ''}  ·  "
-                f"{total_tools} tool{'s' if total_tools != 1 else ''} loaded[/dim]",
-                id="mcp-title",
-            )
+            with Horizontal(id="mcp-header"):
+                yield Label(
+                    f"[bold]MCP Servers[/bold]  "
+                    f"[dim]{n} server{'s' if n != 1 else ''}  ·  "
+                    f"{total_tools} tool{'s' if total_tools != 1 else ''} loaded[/dim]",
+                    id="mcp-title",
+                )
+                yield Static("[bold red]\\[x][/bold red]", id="mcp-close")
             with VerticalScroll(classes="mcp-scroll"):
                 yield Container(id="mcp-content")
             yield Static(
                 "[dim]↑↓/j/k[/dim] scroll  [dim]·[/dim]  [dim]PgUp/PgDn[/dim] page  "
-                "[dim]·[/dim]  [dim]esc/q[/dim] close",
+                "[dim]·[/dim]  [dim]q[/dim] close",
                 id="mcp-help",
             )
             yield Footer()
@@ -168,6 +179,10 @@ class MCPViewerScreen(ModalScreen):
 
     def action_scroll_end(self) -> None:
         self._scroller().scroll_end(animate=False)
+
+    def on_click(self, event) -> None:
+        if getattr(event.widget, "id", None) == "mcp-close":
+            self.dismiss(None)
 
     def action_dismiss_screen(self) -> None:
         self.dismiss(None)

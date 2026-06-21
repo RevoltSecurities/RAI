@@ -19,10 +19,9 @@ from rai.harness.models import (
 from rai.harness.runner import _RUN_REGISTRY
 from rai.sessions.store import (
     build_stream_config,
-    delete_thread_sync,
-    get_thread_by_id_sync,
-    list_threads_sync,
-    thread_exists_sync,
+    delete_thread_async,
+    get_thread_by_id_async,
+    list_threads_async,
 )
 
 router = APIRouter(tags=["threads"])
@@ -68,13 +67,13 @@ async def list_threads(
     limit: int = Query(20, ge=1, le=200),
     sort: str = Query("updated"),
 ) -> list[ThreadInfo]:
-    rows = list_threads_sync(agent_name=agent, limit=limit, sort_by=sort)
+    rows = await list_threads_async(agent_name=agent, limit=limit, sort_by=sort)
     return [ThreadInfo(**r) for r in rows]
 
 
 @router.get("/threads/{thread_id}", response_model=ThreadInfo)
 async def get_thread(thread_id: str) -> ThreadInfo:
-    thread = get_thread_by_id_sync(thread_id)
+    thread = await get_thread_by_id_async(thread_id)
     if thread is None:
         raise HTTPException(status_code=404, detail=f"Thread '{thread_id}' not found")
     return ThreadInfo(**thread)
@@ -84,7 +83,7 @@ async def get_thread(thread_id: str) -> ThreadInfo:
 async def get_thread_state(thread_id: str, request: Request) -> ThreadStateResponse:
     pool = request.app.state.pool
 
-    _ti = get_thread_by_id_sync(thread_id)
+    _ti = await get_thread_by_id_async(thread_id)
     agent_name = (_ti.get("agent_name") if _ti else None) or (pool.agent_names() or [None])[0]
     if not agent_name:
         raise HTTPException(status_code=503, detail="No agents registered")
@@ -120,7 +119,7 @@ async def get_thread_history(
     offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
     pool = request.app.state.pool
-    _ti = get_thread_by_id_sync(thread_id)
+    _ti = await get_thread_by_id_async(thread_id)
     agent_name = (_ti.get("agent_name") if _ti else None) or (pool.agent_names() or [None])[0]
     if not agent_name:
         raise HTTPException(status_code=503, detail="No agents registered")
@@ -147,7 +146,7 @@ async def get_thread_history(
 
 @router.delete("/threads/{thread_id}")
 async def delete_thread(thread_id: str) -> dict:
-    deleted = delete_thread_sync(thread_id)
+    deleted = await delete_thread_async(thread_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Thread '{thread_id}' not found")
     return {"thread_id": thread_id, "deleted": True}
@@ -174,7 +173,7 @@ async def list_thread_runs(
 async def compact_thread(thread_id: str, request: Request) -> CompactResponse:
     """Trigger manual context compaction by injecting /compact into the thread."""
     pool = request.app.state.pool
-    _ti = get_thread_by_id_sync(thread_id)
+    _ti = await get_thread_by_id_async(thread_id)
     agent_name = (_ti.get("agent_name") if _ti else None) or (pool.agent_names() or [None])[0]
     if not agent_name:
         raise HTTPException(status_code=503, detail="No agents registered")
@@ -225,7 +224,7 @@ async def compact_thread(thread_id: str, request: Request) -> CompactResponse:
 async def compact_status(thread_id: str, request: Request) -> CompactStatusResponse:
     """Return token usage estimate and compaction recommendation."""
     pool = request.app.state.pool
-    _ti = get_thread_by_id_sync(thread_id)
+    _ti = await get_thread_by_id_async(thread_id)
     agent_name = (_ti.get("agent_name") if _ti else None) or (pool.agent_names() or [None])[0]
     if not agent_name:
         raise HTTPException(status_code=503, detail="No agents registered")
@@ -271,7 +270,7 @@ async def compact_status(thread_id: str, request: Request) -> CompactStatusRespo
 async def get_thread_summary(thread_id: str, request: Request) -> ThreadSummaryResponse:
     """Return the most recent summarization text from the thread checkpoint."""
     pool = request.app.state.pool
-    _ti = get_thread_by_id_sync(thread_id)
+    _ti = await get_thread_by_id_async(thread_id)
     agent_name = (_ti.get("agent_name") if _ti else None) or (pool.agent_names() or [None])[0]
     if not agent_name:
         raise HTTPException(status_code=503, detail="No agents registered")

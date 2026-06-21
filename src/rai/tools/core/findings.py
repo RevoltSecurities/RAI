@@ -114,6 +114,7 @@ class FindingsAddInput(BaseModel):
     chain: str = Field(default="", description="Attack chain or kill-chain stage")
     references: str = Field(default="", description="Reference URLs (comma-separated)")
     session: str = Field(default="", description="Session date (auto-set to today if empty)")
+    step_id: int = Field(default=0, description="Plan step number that produced this finding (auto-populated if 0)")
 
 
 class FindingsAddTool(BaseTool):
@@ -151,7 +152,16 @@ class FindingsAddTool(BaseTool):
         chain: str = "",
         references: str = "",
         session: str = "",
+        step_id: int = 0,
     ) -> str:
+        # Auto-populate step_id from current plan step if not explicitly set
+        if not step_id:
+            try:
+                from rai.harness.plan.tools import get_current_step
+                step_id = get_current_step()
+            except Exception:
+                pass
+
         finding = {
             "title": title,
             "severity": severity.lower(),
@@ -175,11 +185,13 @@ class FindingsAddTool(BaseTool):
             "chain": chain,
             "references": references,
             "session": session or datetime.now(UTC).strftime("%Y-%m-%d"),
+            "step_id": step_id,
             "source": "agent",
         }
         _add_finding(finding)
         count = len(_get_findings())
-        return f"Finding recorded. Total findings in session: {count}"
+        step_info = f" (step {step_id})" if step_id else ""
+        return f"Finding recorded{step_info}. Total findings in session: {count}"
 
 
 class FindingsListTool(BaseTool):

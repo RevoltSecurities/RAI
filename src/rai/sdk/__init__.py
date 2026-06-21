@@ -79,6 +79,27 @@ from rai.sdk.client import (
     NotificationEvent,
 )
 
+# ---- Claude Serve client ---------------------------------------------------
+from rai.sdk.client import (
+    ClaudeServeClient,
+    ClaudeServeConfig,
+    ClaudeSessionIdEvent,
+    ClaudeTokenEvent,
+    ClaudeThinkingEvent,
+    ClaudeToolStartEvent,
+    ClaudeToolResultEvent,
+    ClaudeSubagentStartEvent,
+    ClaudeSubagentProgressEvent,
+    ClaudeSubagentDoneEvent,
+    ClaudeHITLRequestEvent,
+    ClaudeHITLResponseEvent,
+    ClaudePlanBlockedEvent,
+    ClaudeRateLimitEvent,
+    ClaudeRunEndEvent,
+    ClaudeErrorEvent,
+    parse_claude_event,
+)
+
 # ---- Engine ----------------------------------------------------------------
 from rai.sdk.engine import (
     create_rai_agent,
@@ -106,10 +127,27 @@ from rai.sdk.middleware import (
     MemoryMiddleware,
     SkillsMiddleware,
     LocalAsyncAgentMiddleware,
+    AsyncRaiSubagentsMiddleware,
     RTKToolMiddleware,
     MessageCompressionMiddleware,
     ToolResultCompressionMiddleware,
+    WriteTruncateMiddleware,
     LoopDetectionMiddleware,
+    ReadFileDedupMiddleware,
+    SubagentRestrictMiddleware,
+    AllowedToolsMiddleware,
+    CostTrackingMiddleware,
+    RetryMiddleware,
+)
+
+# ---- Subagent system v2 (builders/types) ------------------------------------
+from rai.harness.subagents_v2 import (
+    SubagentService,
+    build_subagent_tools,
+    build_subagent_system_section,
+    AsyncTask,
+    AsyncSubAgentState,
+    CompletionNotification,
 )
 
 # ---- Tools (top-level getters) ---------------------------------------------
@@ -146,7 +184,104 @@ from deepagents.middleware.subagents import SubAgent
 from deepagents.backends import CompositeBackend, LocalShellBackend
 from deepagents.backends.filesystem import FilesystemBackend
 
+# ---- Claude SDK (no API key — uses Claude Code subscription) ---------------
+from rai.engine.claude_sdk import (
+    ClaudeAgent,
+    ClaudeAgentBuilder,
+    ClaudeAgentRegistry,
+    RunResult,
+    RunnableClaudeAgent,
+    build_claude_options,
+    build_default_hooks,
+    load_claude_subagents,
+    ClaudeSessionManager,
+    ForkSessionResult,
+    SDKSessionInfo,
+    SessionMessage,
+)
+# claude-agent-sdk primitive types — re-exported so users never import from claude_agent_sdk directly
+from claude_agent_sdk.types import (
+    AgentDefinition,
+    HookMatcher,
+    ClaudeAgentOptions,
+    PermissionResultAllow,
+    PermissionResultDeny,
+)
+# Stream event types + helpers (all from events.py — single source of truth)
+from rai.engine.claude_sdk.events import (
+    AssistantMessage,
+    UserMessage,
+    SystemMessage,
+    ResultMessage,
+    StreamEvent,
+    RateLimitEvent,
+    HookEventMessage,
+    MirrorErrorMessage,
+    DeferredToolUse,
+    TextBlock,
+    ThinkingBlock,
+    ToolUseBlock,
+    ToolResultBlock,
+    ServerToolUseBlock,
+    ServerToolResultBlock,
+    TaskStartedMessage,
+    TaskProgressMessage,
+    TaskNotificationMessage,
+    is_token_event,
+    is_thinking_event,
+    is_tool_input_event,
+    iter_tokens,
+    iter_thinking,
+    iter_tool_input,
+    iter_text_blocks,
+    iter_thinking_blocks,
+    iter_tool_calls,
+    full_text,
+    STREAM_MESSAGE_START, STREAM_CONTENT_START, STREAM_CONTENT_DELTA,
+    STREAM_CONTENT_STOP, STREAM_MESSAGE_DELTA, STREAM_MESSAGE_STOP,
+    DELTA_TEXT, DELTA_THINKING, DELTA_SIGNATURE, DELTA_INPUT_JSON,
+    BLOCK_TEXT, BLOCK_THINKING, BLOCK_TOOL_USE,
+    STOP_END_TURN, STOP_TOOL_USE, STOP_MAX_TURNS, STOP_ERROR,
+    TASK_COMPLETED, TASK_FAILED, TASK_STOPPED,
+)
+
 __all__ = [
+    # Claude SDK (no API key)
+    "ClaudeAgent",
+    "ClaudeAgentBuilder",
+    "RunnableClaudeAgent",
+    "RunResult",
+    "ClaudeAgentRegistry",
+    "build_claude_options",
+    "load_claude_subagents",
+    "build_default_hooks",
+    # Session management
+    "ClaudeSessionManager",
+    "ForkSessionResult",
+    "SDKSessionInfo",
+    "SessionMessage",
+    # claude-agent-sdk primitive types (re-exported)
+    "AgentDefinition", "HookMatcher", "ClaudeAgentOptions",
+    "PermissionResultAllow", "PermissionResultDeny",
+    # Stream event / message types
+    "AssistantMessage", "UserMessage", "SystemMessage", "ResultMessage",
+    "StreamEvent", "RateLimitEvent", "HookEventMessage", "MirrorErrorMessage",
+    "DeferredToolUse",
+    "TextBlock", "ThinkingBlock", "ToolUseBlock", "ToolResultBlock",
+    "ServerToolUseBlock", "ServerToolResultBlock",
+    "TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage",
+    # Event helpers
+    "is_token_event", "is_thinking_event", "is_tool_input_event",
+    "iter_tokens", "iter_thinking", "iter_tool_input",
+    "iter_text_blocks", "iter_thinking_blocks", "iter_tool_calls",
+    "full_text",
+    # Stream event type constants
+    "STREAM_MESSAGE_START", "STREAM_CONTENT_START", "STREAM_CONTENT_DELTA",
+    "STREAM_CONTENT_STOP", "STREAM_MESSAGE_DELTA", "STREAM_MESSAGE_STOP",
+    "DELTA_TEXT", "DELTA_THINKING", "DELTA_SIGNATURE", "DELTA_INPUT_JSON",
+    "BLOCK_TEXT", "BLOCK_THINKING", "BLOCK_TOOL_USE",
+    "STOP_END_TURN", "STOP_TOOL_USE", "STOP_MAX_TURNS", "STOP_ERROR",
+    "TASK_COMPLETED", "TASK_FAILED", "TASK_STOPPED",
     # High-level SDK
     "RAIAgent",
     "RAIAgentBuilder",
@@ -192,7 +327,21 @@ __all__ = [
     "RTKToolMiddleware",
     "MessageCompressionMiddleware",
     "ToolResultCompressionMiddleware",
+    "WriteTruncateMiddleware",
     "LoopDetectionMiddleware",
+    "ReadFileDedupMiddleware",
+    "SubagentRestrictMiddleware",
+    "AllowedToolsMiddleware",
+    "CostTrackingMiddleware",
+    "RetryMiddleware",
+    "AsyncRaiSubagentsMiddleware",
+    # Subagent system v2
+    "SubagentService",
+    "build_subagent_tools",
+    "build_subagent_system_section",
+    "AsyncTask",
+    "AsyncSubAgentState",
+    "CompletionNotification",
     # Model SDK
     "build_model",
     "ModelConfig",
@@ -256,4 +405,22 @@ __all__ = [
     "TaskCompletedEvent",
     "ErrorEvent",
     "NotificationEvent",
+    # Claude Serve client
+    "ClaudeServeClient",
+    "ClaudeServeConfig",
+    "ClaudeSessionIdEvent",
+    "ClaudeTokenEvent",
+    "ClaudeThinkingEvent",
+    "ClaudeToolStartEvent",
+    "ClaudeToolResultEvent",
+    "ClaudeSubagentStartEvent",
+    "ClaudeSubagentProgressEvent",
+    "ClaudeSubagentDoneEvent",
+    "ClaudeHITLRequestEvent",
+    "ClaudeHITLResponseEvent",
+    "ClaudePlanBlockedEvent",
+    "ClaudeRateLimitEvent",
+    "ClaudeRunEndEvent",
+    "ClaudeErrorEvent",
+    "parse_claude_event",
 ]

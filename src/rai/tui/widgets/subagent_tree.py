@@ -9,7 +9,18 @@ from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import Static
 
-_SPINNER = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+_BLOOM = (
+    ("[dim]·[/dim]",                  "dim"),
+    ("[dim].[/dim]",                  "dim"),
+    ("[yellow]+[/yellow]",            "mid"),
+    ("[yellow]✶[/yellow]",            "bright"),
+    ("[bold yellow]✻[/bold yellow]",  "peak"),
+    ("[yellow]✽[/yellow]",            "bright"),
+    ("[yellow]✶[/yellow]",            "mid"),
+    ("[dim]+[/dim]",                  "dim"),
+    ("[dim]·[/dim]",                  "dim"),
+    ("[dim].[/dim]",                  "dim"),
+)
 _BLOOM_DURATION = 1.5
 _HIDE_DELAY = 3.0
 
@@ -61,8 +72,8 @@ class SubagentTreePanel(Widget):
         for task in self._tasks.values():
             elapsed = int((task.done_time or now) - task.start_time)
             if task.status == "running":
-                frame = _SPINNER[int(now * 8) % len(_SPINNER)]
-                glyph = f"[yellow]{frame}[/yellow]"
+                frame, _ = _BLOOM[int(now * 8) % len(_BLOOM)]
+                glyph = frame
                 age = f"[dim][{elapsed}s][/dim]"
             elif task.status in ("completed", "done"):
                 # bloom or settled

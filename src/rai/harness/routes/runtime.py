@@ -66,15 +66,22 @@ async def create_runtime_run(body: RuntimeRunRequest, request: Request) -> RunRe
     agent_def = body.agent
 
     try:
-        from rai.harness.subagents.tools import get_http_subagent_tools
+        from rai.harness.plan.tools import get_plan_tools
+        from rai.harness.subagents_v2 import build_subagent_tools, build_subagent_system_section
+        from rai.agents.loader import load_subagents_for
+        _rt_specs = load_subagents_for(agent_def.name) if not agent_def.disable_subagents else []
+        _rt_tools = build_subagent_tools(_rt_specs) + get_plan_tools() if _rt_specs else get_plan_tools()
+        _rt_extra = agent_def.system_prompt_extra or ""
+        if _rt_specs:
+            _rt_extra = (_rt_extra + "\n\n" + build_subagent_system_section(_rt_specs)).strip()
         graph, _ = create_rai_agent(
             model=agent_def.model or DEFAULT_MODEL,
             agent_name=agent_def.name,
             system_prompt=agent_def.system_prompt or None,
-            system_prompt_extra=agent_def.system_prompt_extra or None,
+            system_prompt_extra=_rt_extra or None,
             disable_native_tools=agent_def.disable_native_tools,
             disable_subagents=agent_def.disable_subagents,
-            extra_tools=get_http_subagent_tools(),
+            extra_tools=_rt_tools,
             checkpointer=checkpointer,
             interactive=False,
             auto_approve=True,

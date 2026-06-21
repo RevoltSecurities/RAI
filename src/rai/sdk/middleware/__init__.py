@@ -14,10 +14,17 @@ from rai.sdk.middleware.middleware import (  # noqa: F401
     MemoryMiddleware,
     SkillsMiddleware,
     LocalAsyncAgentMiddleware,
+    AsyncRaiSubagentsMiddleware,
     RTKToolMiddleware,
     MessageCompressionMiddleware,
     ToolResultCompressionMiddleware,
+    WriteTruncateMiddleware,
     LoopDetectionMiddleware,
+    ReadFileDedupMiddleware,
+    SubagentRestrictMiddleware,
+    AllowedToolsMiddleware,
+    CostTrackingMiddleware,
+    RetryMiddleware,
 )
 
 __all__ = [
@@ -37,5 +44,12 @@ __all__ = [
     "RTKToolMiddleware",
     "MessageCompressionMiddleware",
     "ToolResultCompressionMiddleware",
+    "WriteTruncateMiddleware",
     "LoopDetectionMiddleware",
+    "ReadFileDedupMiddleware",
+    "SubagentRestrictMiddleware",
+    "AllowedToolsMiddleware",
+    "CostTrackingMiddleware",
+    "RetryMiddleware",
+    "AsyncRaiSubagentsMiddleware",
 ]

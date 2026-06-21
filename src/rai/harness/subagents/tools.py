@@ -54,14 +54,15 @@ def _get_available_agents(parent_name: str) -> dict[str, str]:
 
 
 def _check_agent_name(agent: str, ctx: dict) -> str | None:
-    """Return an error string if agent name is unknown, else None.
-
-    'rai' is always valid (base agent fallback). Any other name is checked
-    against the subagents configured for the parent agent.
-    """
-    if not agent or agent == "rai":
+    """Return an error string if agent name is unknown or is the parent itself, else None."""
+    if not agent:
         return None
     parent = ctx.get("agent_name", "rai")
+    if agent == parent:
+        return (
+            f"Cannot spawn '{agent}' as a subagent of itself. "
+            f"Call list_available_agents() to see available subagents."
+        )
     available = _get_available_agents(parent)
     if agent not in available:
         names = ", ".join(sorted(available)) if available else "none configured"
@@ -185,6 +186,7 @@ async def _run_pipeline(
     checkpointer: Any,
     parent_api_key: str = "",
     parent_base_url: str = "",
+    parent_model: str = "",
 ) -> None:
     """Run pipeline batches in order. Skips remaining batches if any task fails."""
     from rai.harness.subagents.registry import _SUBAGENT_OUTPUTS
@@ -234,6 +236,7 @@ async def _run_pipeline(
                     depends_on=task_spec.get("depends_on"),
                     parent_api_key=parent_api_key,
                     parent_base_url=parent_base_url,
+                    parent_model=parent_model,
                 )
                 batch_task_ids.append(task_id)
 
@@ -315,7 +318,7 @@ async def start_agent_task(
 
     Args:
         prompt: Task description for the subagent.
-        agent: Agent name (must be registered on this server, or use 'rai').
+        agent: Agent name (call list_available_agents() first). Cannot be the parent agent itself.
         label: Optional human-readable label for the task.
         system_prompt: Optional system prompt override for the subagent.
         model: Optional model override (e.g. 'anthropic:claude-sonnet-4-6').
@@ -351,6 +354,7 @@ async def start_agent_task(
         label=assigned_label,
         parent_api_key=ctx.get("parent_api_key", ""),
         parent_base_url=ctx.get("parent_base_url", ""),
+        parent_model=ctx.get("parent_model", ""),
     )
 
     ref = assigned_label or task_id
@@ -384,7 +388,7 @@ async def run_agent_sync(
 
     Args:
         prompt: Task description for the subagent.
-        agent: Agent name (must be registered, or use 'rai').
+        agent: Agent name (call list_available_agents() first). Cannot be the parent agent itself.
         timeout: Maximum seconds to wait (default 300).
         system_prompt: Optional system prompt override.
         model: Optional model override.
@@ -412,6 +416,7 @@ async def run_agent_sync(
         system_prompt=system_prompt or None,
         parent_api_key=ctx.get("parent_api_key", ""),
         parent_base_url=ctx.get("parent_base_url", ""),
+        parent_model=ctx.get("parent_model", ""),
     )
 
     with _SUBAGENT_LOCK:
@@ -439,7 +444,7 @@ async def start_pipeline(
     Args:
         tasks: List of task specs. Each spec:
             {
-              "agent": "rai",           # agent name
+              "agent": "recon",          # agent name (from list_available_agents)
               "prompt": "do X",          # task input
               "label": "recon",          # unique label for depends_on references
               "depends_on": ["recon"],   # labels that must complete first (optional)
@@ -452,6 +457,16 @@ async def start_pipeline(
         JSON with pipeline_id, total task count, and batch topology.
     """
     ctx = _get_run_context()
+
+    # Validate all agent names before launching the pipeline
+    for spec in tasks:
+        if not isinstance(spec, dict):
+            continue
+        effective_agent = spec.get("agent", "rai")
+        err = _check_agent_name(effective_agent, ctx)
+        if err:
+            return json.dumps({"error": err})
+
     pid = pipeline_id or uuid4().hex
     batches = _plan_batches(tasks)
 
@@ -466,6 +481,7 @@ async def start_pipeline(
             checkpointer=ctx["checkpointer"],
             parent_api_key=ctx.get("parent_api_key", ""),
             parent_base_url=ctx.get("parent_base_url", ""),
+            parent_model=ctx.get("parent_model", ""),
         ),
         name=f"pipeline-{pid[:8]}",
     )
@@ -774,6 +790,7 @@ async def start_parallel_agents(
             label=assigned_label,
             parent_api_key=ctx.get("parent_api_key", ""),
             parent_base_url=ctx.get("parent_base_url", ""),
+            parent_model=ctx.get("parent_model", ""),
         )
 
         entry: dict = {
@@ -880,11 +897,12 @@ async def list_available_agents() -> str:
     parent = ctx.get("agent_name", "rai")
     available = _get_available_agents(parent)
     if not available:
-        return f"No subagents configured for '{parent}'. Use agent='rai' to dispatch to the base agent."
+        return f"No subagents configured for '{parent}'."
     lines = ["Available subagents (pass the name as the 'agent' parameter):\n"]
     for name, desc in sorted(available.items()):
+        if name == parent:
+            continue
         lines.append(f"  • {name} — {desc}" if desc else f"  • {name}")
-    lines.append("\nUse agent='rai' to dispatch to the base RAI agent (no specialisation).")
     return "\n".join(lines)
 
 

@@ -28,6 +28,15 @@ def _get_meta(task_id: str) -> dict:
     with _SUBAGENT_LOCK:
         meta = _SUBAGENT_REGISTRY.get(task_id)
     if meta is None:
+        # Fallback to v2 SubagentService
+        try:
+            from rai.harness.subagents_v2.service import SubagentService
+            svc = SubagentService.instance()
+            v2_meta = svc.get_task_meta(task_id)
+            if v2_meta:
+                return dict(v2_meta)
+        except Exception:
+            pass
         raise HTTPException(status_code=404, detail=f"Subagent task '{task_id}' not found")
     return dict(meta)
 
@@ -65,9 +74,20 @@ async def list_subagents(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[dict[str, Any]]:
-    """List all subagents (active and recently completed)."""
+    """List all subagents (active and recently completed) — merges v1 + v2."""
     with _SUBAGENT_LOCK:
         items = list(_SUBAGENT_REGISTRY.values())
+
+    # Merge v2 SubagentService tasks
+    try:
+        from rai.harness.subagents_v2.service import SubagentService
+        svc = SubagentService.instance()
+        v2_ids = {i.get("task_id") for i in items}
+        for meta in svc.list_all_tasks():
+            if meta.get("task_id") not in v2_ids:
+                items.append(dict(meta))
+    except Exception:
+        pass
 
     if status:
         items = [i for i in items if i.get("status") == status]
@@ -96,6 +116,15 @@ async def stream_subagent(task_id: str, request: Request) -> StreamingResponse:
     """
     with _SUBAGENT_LOCK:
         bus = _SUBAGENT_BUSES.get(task_id)
+
+    if bus is None:
+        # Try v2 SubagentService bus
+        try:
+            from rai.harness.subagents_v2.service import SubagentService
+            svc = SubagentService.instance()
+            bus = svc.get_bus(task_id)
+        except Exception:
+            pass
 
     if bus is None:
         # Bus not yet created (race) or already cleaned — create lazily
@@ -168,6 +197,19 @@ async def submit_subagent_interrupt(
         fut = _SUBAGENT_HITL.get(task_id)
         status = (_SUBAGENT_REGISTRY.get(task_id) or {}).get("status", "unknown")
 
+    # Try v2 SubagentService HITL
+    if fut is None:
+        try:
+            from rai.harness.subagents_v2.service import SubagentService
+            svc = SubagentService.instance()
+            v2_meta = svc.get_task_meta(task_id)
+            if v2_meta and v2_meta.get("status") == "interrupted":
+                decision = _build_decision(body)
+                svc.resolve_hitl(task_id, decision)
+                return {"task_id": task_id, "decision": body.decision, "resolved": True}
+        except Exception:
+            pass
+
     if fut is None:
         # Recovery case: task restored from tasks.db restart as "interrupted" but
         # no live HITL future exists — resume directly from LangGraph checkpoint.
@@ -204,6 +246,19 @@ async def submit_subagent_interrupt(
 async def cancel_subagent(task_id: str) -> dict[str, Any]:
     """Cancel a running subagent."""
     _get_meta(task_id)  # 404 if not found
+
+    # Try v2 first
+    try:
+        from rai.harness.subagents_v2.service import SubagentService
+        svc = SubagentService.instance()
+        v2_meta = svc.get_task_meta(task_id)
+        if v2_meta:
+            if v2_meta.get("status") in ("completed", "failed", "cancelled", "timeout"):
+                return {"task_id": task_id, "status": v2_meta["status"], "cancelled": False}
+            await svc.cancel_task(task_id)
+            return {"task_id": task_id, "status": "cancelled", "cancelled": True}
+    except Exception:
+        pass
 
     with _SUBAGENT_LOCK:
         task = _SUBAGENT_TASKS.get(task_id)

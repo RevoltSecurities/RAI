@@ -20,12 +20,13 @@ import argparse
 import asyncio
 import os
 
-from rai import DEFAULT_MODEL, AsyncSubAgent
 from rai.sdk import (
     RAIAgentBuilder,
+    AsyncSubAgent,
     FindingsExportTool,
     get_cloud_tools,
     init_findings_store,
+    DEFAULT_MODEL,
 )
 
 COORDINATOR_PROMPT = """\

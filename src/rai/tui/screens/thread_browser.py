@@ -6,11 +6,10 @@ import os
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Container
+from textual.containers import Container, Horizontal
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Label
+from textual.widgets import DataTable, Footer, Label, Static
 
 
 class ThreadBrowserScreen(ModalScreen):
@@ -25,14 +24,23 @@ class ThreadBrowserScreen(ModalScreen):
         border: round $accent;
         padding: 1 2;
     }
+    #thread-header {
+        height: 1;
+        margin-bottom: 1;
+    }
+    #thread-header-title {
+        width: 1fr;
+    }
+    #thread-close {
+        width: 3;
+        text-align: right;
+        color: $error;
+        text-style: bold;
+    }
     #thread-modal-shell DataTable {
         height: 1fr;
     }
     """
-
-    BINDINGS = [
-        Binding("escape", "dismiss", "Close"),
-    ]
 
     class ThreadSelected(Message):
         def __init__(self, thread_id: str, agent: str) -> None:
@@ -46,7 +54,9 @@ class ThreadBrowserScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Container(id="thread-modal-shell"):
-            yield Label("Thread Browser  [dim][enter] resume  [esc] close[/dim]")
+            with Horizontal(id="thread-header"):
+                yield Label("Thread Browser  [dim][enter] resume[/dim]", id="thread-header-title")
+                yield Static("[bold red]\\[x][/bold red]", id="thread-close")
             table = DataTable(cursor_type="row", id="thread-table")
             table.add_columns("id", "agent", "branch", "cwd", "updated", "prompt")
             for t in self._threads:
@@ -75,6 +85,10 @@ class ThreadBrowserScreen(ModalScreen):
                 )
                 return
         self.dismiss(None)
+
+    def on_click(self, event) -> None:
+        if getattr(event.widget, "id", None) == "thread-close":
+            self.dismiss(None)
 
     def action_dismiss(self) -> None:
         self.dismiss(None)

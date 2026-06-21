@@ -12,7 +12,9 @@ Covers every major extension point:
   H. Headless / CI mode — no HITL, no interactive prompts
   I. Session resume — persist and reload from a thread ID
   J. Low-level factory — call create_rai_agent() directly for full control
-  K. HTTP server + TUI — RAIHTTPServer + RaiHttpTUI from rai.sdk.harness / rai.sdk.tui
+  K. HTTP server + TUI — RAIHTTPServer + RaiHttpTUI + BrandingConfig from rai.sdk
+  L. Multiple custom tools — @tool, StructuredTool, BaseTool subclass, add_tools()
+  M. MCP tools — file path, inline dict, auto-discovery, disable, combined
 
 Usage:
     python examples/09_sdk_cookbook.py --example A
@@ -60,7 +62,7 @@ from rai.sdk import (
 )
 
 # Modular sub-package imports (these are always available independently)
-from rai.sdk.tui import RaiHttpTUI
+from rai.sdk.tui import RaiHttpTUI, BrandingConfig
 
 
 # ===========================================================================
@@ -724,7 +726,7 @@ async def example_j_factory(task: str) -> None:
 
 
 # ===========================================================================
-# K. HTTP server + TUI — RAIHTTPServer (rai.sdk.harness) + RaiHttpTUI (rai.sdk.tui)
+# K. HTTP server + TUI — RAIHTTPServer + RaiHttpTUI + BrandingConfig
 # ===========================================================================
 
 def example_k_tui(_task: str = "") -> None:  # noqa: ARG001
@@ -732,9 +734,10 @@ def example_k_tui(_task: str = "") -> None:  # noqa: ARG001
 
     Uses:
       rai.sdk.harness  → RAIHTTPServer, HTTPConfig
-      rai.sdk.tui      → RaiHttpTUI
+      rai.sdk.tui      → RaiHttpTUI, BrandingConfig
       rai.sdk.builder  → RAIAgentBuilder  (via RAIAgent.builder())
 
+    BrandingConfig white-labels the TUI: custom icon, title, tips, and info rows.
     The HTTP server runs in a background thread so it doesn't block the TUI.
     On TUI exit the uvicorn server is signalled to stop.
     """
@@ -795,11 +798,293 @@ def example_k_tui(_task: str = "") -> None:  # noqa: ARG001
         print(".", end="", flush=True)
     print(" ready")
 
-    # Open TUI — blocks until user closes it
-    RaiHttpTUI(base_url=base, agent=agent_name).run()
+    # Open TUI — blocks until user closes it.
+    # BrandingConfig customizes the welcome banner: icon, title, tips, info rows.
+    # Use BrandingConfig(show_banner=False) to suppress the banner entirely.
+    branding = BrandingConfig(
+        icon="[bold green]🍳  Cookbook Agent[/bold green]",
+        title="SDK Cookbook",
+        subtitle="Example K",
+        tips="[dim]/new[/dim] thread  ·  [dim]ctrl+t[/dim] theme  ·  [dim]ctrl+b[/dim] bg runs",
+        info_rows=[("example", "K — HTTP server + TUI")],
+    )
+    RaiHttpTUI(base_url=base, agent=agent_name, branding=branding).run()
 
     # Graceful shutdown
     uv.should_exit = True
+
+
+# ===========================================================================
+# L. Multiple custom tools — all four ways to add tools
+# ===========================================================================
+
+# ---- Pattern 1: @tool decorator (simplest) ----
+@tool
+def whois_lookup(domain: str) -> str:
+    """Return WHOIS registrar and expiry info for a domain."""
+    import subprocess
+    try:
+        out = subprocess.check_output(["whois", domain], timeout=10, text=True)
+        # Extract the three most useful lines
+        lines = [l for l in out.splitlines() if any(
+            k in l.lower() for k in ("registrar:", "expiry date:", "creation date:")
+        )]
+        return "\n".join(lines) or out[:500]
+    except Exception as e:
+        return f"whois error: {e}"
+
+
+@tool
+def asn_lookup(ip: str) -> str:
+    """Return the ASN and organisation name for an IP address."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"https://ipinfo.io/{ip}/json", timeout=5) as r:
+            data = json.loads(r.read())
+            return f"ASN: {data.get('org', 'unknown')}  City: {data.get('city')}  Country: {data.get('country')}"
+    except Exception as e:
+        return f"ASN lookup error: {e}"
+
+
+# ---- Pattern 2: StructuredTool.from_function (when you need explicit control) ----
+def _banner_grab(host: str, port: int = 80) -> str:
+    """Read the first 512 bytes from an open TCP port."""
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=5) as s:
+            s.sendall(b"HEAD / HTTP/1.0\r\n\r\n")
+            return s.recv(512).decode(errors="replace")
+    except Exception as e:
+        return f"Banner grab failed: {e}"
+
+
+banner_grab = StructuredTool.from_function(
+    func=_banner_grab,
+    name="banner_grab",
+    description="Grab the service banner from a TCP port (default port 80).",
+)
+
+
+# ---- Pattern 3: a BaseTool subclass (full control — custom _run + _arun) ----
+from langchain_core.tools import BaseTool as _BaseTool
+from pydantic import BaseModel as _BaseModel
+
+
+class _SubdomainEnumInput(_BaseModel):
+    domain: str
+    wordlist: list[str] = ["www", "api", "mail", "dev", "staging", "admin"]
+
+
+class SubdomainEnumTool(_BaseTool):
+    name: str = "subdomain_enum"
+    description: str = "Brute-force common subdomains against a domain via DNS."
+    args_schema: type[_BaseModel] = _SubdomainEnumInput
+
+    def _run(self, domain: str, wordlist: list[str] = None) -> str:  # type: ignore[override]
+        import socket
+        if wordlist is None:
+            wordlist = ["www", "api", "mail", "dev", "staging", "admin"]
+        found = []
+        for sub in wordlist:
+            fqdn = f"{sub}.{domain}"
+            try:
+                socket.getaddrinfo(fqdn, None)
+                found.append(fqdn)
+            except socket.gaierror:
+                pass
+        return f"Found: {found}" if found else "No subdomains resolved."
+
+    async def _arun(self, domain: str, wordlist: list[str] = None) -> str:  # type: ignore[override]
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._run, domain, wordlist or [])
+
+
+async def example_l_multi_tools(task: str) -> None:
+    """L: Four ways to add custom tools — @tool, StructuredTool, BaseTool subclass, add_tools list.
+
+    Patterns shown:
+      1. @tool          — decorator, simplest for quick tools
+      2. StructuredTool — from_function(), explicit name/description
+      3. BaseTool       — full subclass with async _arun support
+      4. add_tools()    — pass a list to add multiple tools at once
+         add_tool()     — singular, for one tool at a time
+
+    All patterns work with or without native RAI tools.
+    Mix and match freely — they're all BaseTool under the hood.
+    """
+    async with await (
+        RAIAgent.builder()
+        .model(DEFAULT_MODEL)
+        .agent_name("recon-custom")
+        # Drop ALL 80+ RAI built-ins — agent gets ONLY the tools below.
+        # Remove this line to keep native tools and add yours on top.
+        .without_native_tools()
+        .without_subagents()
+        .without_memory()
+        .without_skills()
+        .without_hitl()
+
+        # Pattern 4a: add_tools() — pass a list (most common for multiple tools)
+        .add_tools([
+            whois_lookup,       # @tool
+            asn_lookup,         # @tool
+            banner_grab,        # StructuredTool
+        ])
+        # Pattern 4b: add_tool() — singular, chain as many times as needed
+        .add_tool(SubdomainEnumTool())   # BaseTool subclass
+
+        .system_prompt(
+            "You are a passive reconnaissance specialist. "
+            "Use whois_lookup, asn_lookup, banner_grab, and subdomain_enum "
+            "to map the attack surface of the given domain. "
+            "Report all findings in structured markdown."
+        )
+        .build()
+    ) as agent:
+        result = await agent.run(task)
+        print(result)
+        print(f"thread_id: {agent.thread_id}")
+
+
+# ===========================================================================
+# M. MCP tools — file path, inline dict, auto-discovery, and disable
+# ===========================================================================
+
+async def example_m_mcp(task: str) -> None:
+    """M: Three ways to wire up MCP servers, plus how to disable MCP entirely.
+
+    MCP tools are loaded as BaseTool instances and appended to extra_tools
+    automatically — they work alongside @tool / StructuredTool / native tools.
+
+    Patterns shown:
+      M1. Auto-discovery   — default; reads ~/.rai/.mcp.json + project .mcp.json
+      M2. with_mcp(path)   — load from an explicit JSON file path
+      M3. with_mcp_servers — inline dict, no file needed
+      M4. without_mcp()    — disable ALL MCP loading (useful in CI / sandboxed envs)
+      M5. MCP + native RAI tools combined
+      M6. MCP-only (no native tools)
+    """
+
+    # ---- M1: Auto-discovery (default behaviour — no extra calls needed) ----
+    # RAI reads ~/.rai/.mcp.json and project .mcp.json automatically.
+    # Just build the agent normally — MCP tools are already in the toolset.
+    async with await (
+        RAIAgent.builder()
+        .model(DEFAULT_MODEL)
+        .agent_name("mcp-auto")
+        .without_hitl()
+        .build()
+    ) as agent:
+        print("[M1] auto-discovery — MCP tools loaded from ~/.rai/.mcp.json")
+        result = await agent.run(task)
+        print(result)
+
+    # ---- M2: with_mcp(path) — explicit config file ----
+    # Pass one or more paths to .mcp.json files.
+    # Useful when the config lives outside ~/.rai/ (e.g. per-project or per-customer).
+    mcp_config_path = str(Path.home() / ".rai" / ".mcp.json")  # use your own path
+    async with await (
+        RAIAgent.builder()
+        .model(DEFAULT_MODEL)
+        .agent_name("mcp-explicit")
+        .without_hitl()
+        # Multiple files? Chain calls: .with_mcp(path1).with_mcp(path2)
+        # Or pass all at once: .with_mcp(path1, path2)
+        .with_mcp(mcp_config_path)
+        .build()
+    ) as agent:
+        print(f"[M2] explicit path — {mcp_config_path}")
+        result = await agent.run(task)
+        print(result)
+
+    # ---- M3: with_mcp_servers — inline dict, no file on disk ----
+    # Accepts Claude-format {"mcpServers": {...}} or bare server dict.
+    # Ideal for programmatic or dynamic server registration.
+    async with await (
+        RAIAgent.builder()
+        .model(DEFAULT_MODEL)
+        .agent_name("mcp-inline")
+        .without_hitl()
+        .with_mcp_servers({
+            "mcpServers": {
+                "filesystem": {
+                    "command": "npx",
+                    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+                },
+                "brave-search": {
+                    "command": "npx",
+                    "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+                    "env": {"BRAVE_API_KEY": "your-key-here"},
+                },
+            }
+        })
+        # Bare dict also accepted (auto-wrapped in {"mcpServers": ...}):
+        # .with_mcp_servers({"filesystem": {"command": "npx", "args": [...]}})
+        .build()
+    ) as agent:
+        print("[M3] inline dict — filesystem + brave-search MCP servers")
+        result = await agent.run(task)
+        print(result)
+
+    # ---- M4: without_mcp() — disable ALL MCP loading ----
+    # Useful in CI, sandboxed environments, or when you want a pure tool set.
+    async with await (
+        RAIAgent.builder()
+        .model(DEFAULT_MODEL)
+        .agent_name("mcp-disabled")
+        .without_hitl()
+        .without_mcp()   # skip ~/.rai/.mcp.json, project .mcp.json, everything
+        .build()
+    ) as agent:
+        print("[M4] MCP disabled — no MCP tools loaded")
+        result = await agent.run(task)
+        print(result)
+
+    # ---- M5: MCP + native RAI tools combined ----
+    # Native tools (bash, http_request, nuclei, etc.) + MCP tools coexist.
+    # No extra wiring needed — they all land in the same tool list.
+    async with await (
+        RAIAgent.builder()
+        .model(DEFAULT_MODEL)
+        .agent_name("mcp-plus-native")
+        .without_hitl()
+        # with_native_tools() is the default — just add MCP on top
+        .with_mcp_servers({
+            "filesystem": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            }
+        })
+        # Also add a custom @tool on top
+        .add_tool(whois_lookup)
+        .build()
+    ) as agent:
+        print("[M5] native RAI tools + MCP + custom @tool — all combined")
+        result = await agent.run(task)
+        print(result)
+
+    # ---- M6: MCP-only — disable native tools, load only MCP ----
+    # Clean slate: agent receives exactly what the MCP servers expose.
+    async with await (
+        RAIAgent.builder()
+        .model(DEFAULT_MODEL)
+        .agent_name("mcp-only")
+        .without_native_tools()   # drop all 80+ RAI built-ins
+        .without_subagents()
+        .without_memory()
+        .without_hitl()
+        .with_mcp_servers({
+            "filesystem": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            }
+        })
+        .build()
+    ) as agent:
+        print("[M6] MCP-only — zero native tools, only filesystem MCP server")
+        result = await agent.run(task)
+        print(result)
 
 
 # ===========================================================================
@@ -819,6 +1104,8 @@ EXAMPLES = {
     "H": ("Headless CI mode", example_h, "SAST scan of src/ directory"),
     "J": ("Low-level factory", example_j_factory, "Full pentest with custom harness"),
     "K": ("HTTP server + TUI", example_k_tui, ""),
+    "L": ("Multiple custom tools — @tool / StructuredTool / BaseTool / add_tools", example_l_multi_tools, "Enumerate example.com attack surface"),
+    "M": ("MCP tools — auto-discovery / file / inline / disable / combined", example_m_mcp, "List files in /tmp"),
 }
 
 

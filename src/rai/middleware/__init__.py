@@ -16,6 +16,11 @@ from rai.middleware.model_logger import ModelCallLoggerMiddleware
 from rai.middleware.rtk import RTKToolMiddleware
 from rai.middleware.tool_compaction import ToolResultCompressionMiddleware
 from rai.middleware.loop_detection import LoopDetectionMiddleware
+from rai.middleware.read_dedup import ReadFileDedupMiddleware
+from rai.middleware.subagent_restrict import SubagentRestrictMiddleware
+from rai.middleware.allowed_tools import AllowedToolsMiddleware
+from rai.middleware.cost_tracking import CostTrackingMiddleware
+from rai.middleware.retry import RetryMiddleware
 
 __all__ = [
     "EmptyContentSanitizerMiddleware",
@@ -31,4 +36,9 @@ __all__ = [
     "RTKToolMiddleware",
     "ToolResultCompressionMiddleware",
     "LoopDetectionMiddleware",
+    "ReadFileDedupMiddleware",
+    "SubagentRestrictMiddleware",
+    "AllowedToolsMiddleware",
+    "CostTrackingMiddleware",
+    "RetryMiddleware",
 ]
