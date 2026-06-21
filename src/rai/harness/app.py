@@ -219,6 +219,11 @@ def create_app(pool: AgentPool, config: HTTPConfig) -> FastAPI:
         from rai.sessions.tasks import get_task_store
         from rai.harness.subagents.registry import set_task_store
         from rai.harness.subagents_v2 import SubagentService
+        if not config.api_key:
+            logger.warning(
+                "RAI HTTP server is running WITHOUT an API key — all endpoints are publicly accessible. "
+                "Pass --server-key <secret> to require authentication."
+            )
         async with get_checkpointer() as cp, get_task_store() as task_store:
             set_task_store(task_store)
             SubagentService.initialize(checkpointer=cp, task_store=task_store)
@@ -285,7 +290,7 @@ def create_app(pool: AgentPool, config: HTTPConfig) -> FastAPI:
     if config.api_key:
         @app.middleware("http")
         async def _api_key_guard(request: Request, call_next):
-            if request.url.path in ("/ok", "/docs", "/openapi.json", "/redoc"):
+            if request.url.path == "/ok":
                 return await call_next(request)
             key = request.headers.get("X-API-Key", "")
             if key != config.api_key:

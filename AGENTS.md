@@ -13,7 +13,6 @@
 - **Core framework**: `deepagents==0.5.3` (pinned — do not upgrade without full regression)
 - **Agent graph**: LangGraph `CompiledStateGraph` + SQLite checkpointer (`~/.rai/sessions.db`)
 - **Model default**: `anthropic:claude-sonnet-4-6`
-- **JS SDK**: `@revolt-rai/js` v1.0.0 at `packages/rai-js/`
 - **Claude SDK**: `claude-agent-sdk>=0.2.89` — no API key, uses Claude Code subscription (`src/rai/engine/claude_sdk/`)
 
 ---
@@ -183,20 +182,6 @@ rai/
 │       ├── prompts/            # Per-agent system prompts (rai/, recon/, sast/, etc.)
 │       └── skills/             # Built-in skill definitions
 │
-├── packages/
-│   └── rai-js/                 # TypeScript SDK (@revolt-rai/js v1.0.0)
-│       ├── src/
-│       │   ├── client.ts       # RAIClient — REST + SSE, getHeaders, dynamic auth
-│       │   ├── events.ts       # 40+ typed SSE event interfaces
-│       │   ├── subagents.ts    # SubagentManager class
-│       │   ├── useRAIStream.ts # React hook (useReducer-based, no stale closures)
-│       │   └── index.ts        # Public exports
-│       ├── examples/
-│       │   ├── chatbox/        # Full React chat app (Vite + Tailwind)
-│       │   └── patterns/       # 10 pattern files comparing RAI vs LangGraph SDK
-│       ├── package.json        # @revolt-rai/js, version 1.0.0
-│       └── README.md           # 848-line production docs
-│
 ├── static/                     # Static assets (rai-logo.png) — copied into Docker
 ├── docker/
 │   └── Dockerfile              # Multi-stage build, non-root rai user, port 8000
@@ -205,7 +190,6 @@ rai/
 ├── examples/                   # 17 Python SDK examples + 10 Claude SDK examples
 ├── .github/workflows/
 │   ├── publish-pypi.yml        # PyPI publish on GitHub Release
-│   ├── publish-npm.yml         # npm publish on GitHub Release / v* tag
 │   └── publish-docker-image.yml# GHCR publish on Release / tag / main push
 ├── pyproject.toml              # revolt-rai 2.1.0, hatchling build
 ├── AGENTS.md                   # This file
@@ -570,65 +554,6 @@ Global MCP: `~/.rai/.mcp.json`
 
 ---
 
-## JS SDK — @revolt-rai/js
-
-Located at `packages/rai-js/`. Published separately as `@revolt-rai/js v1.0.0`.
-
-### Architecture
-
-- `useRAIStream` — `useReducer`-based React hook (no `useSyncExternalStore`, no stale closures)
-- `RAIClient` — fetch-based REST + SSE client with `getHeaders` async resolver
-- `SubagentManager` — stable class instance, signals React via `SUBAGENT_TICK` action
-- `dispatchRef` / `processEventRef` / `stateRef` — refs ensure async SSE loop always has latest functions
-
-### Key methods
-
-```ts
-stream.submit(text, opts?)           // start run
-stream.stop()                        // abort SSE + cancel server run
-stream.disconnect()                  // abort SSE only — server keeps running
-stream.joinStream(runId, lastId?)    // reconnect to existing run
-stream.switchThread(id | null)       // switch thread (auto-loads history)
-stream.approveInterrupt()            // HITL approve
-stream.approveInterruptForSession()  // HITL approve for session
-stream.rejectInterrupt(msg?)
-stream.editInterrupt({ name, args })
-stream.respondToInterrupt(msg)
-stream.approvePlan()
-stream.rejectPlan(feedback?)
-stream.answerAskUser(answers)
-```
-
-### Dynamic auth (getHeaders)
-
-```ts
-useRAIStream({
-  getHeaders: async () => ({
-    Authorization: `Bearer ${await auth.getToken()}`,
-    "X-MFA-Token": sessionStorage.getItem("mfa"),
-    "X-Org-Id": store.org.id,
-  }),
-});
-```
-
-Called before EVERY request including SSE reconnects, HITL decisions, plan approvals.
-
-### submit() options
-
-```ts
-stream.submit(text, {
-  agent: "recon",
-  model: "anthropic:claude-opus-4-8",
-  planMode: true,
-  allowedTools: ["bash", "read_file"],
-  maxTurns: 30,
-  metadata: { user_id, org_id },
-  config: { target_scope: "*.example.com" },
-});
-```
-
----
-
 ## Claude SDK — `rai.engine.claude_sdk`
 
 No Anthropic API key required. Uses the user's Claude Code subscription. Claude Code's native tools (Bash, Read, Edit, WebFetch, etc.) cover all security needs — no custom tool wrapping.
@@ -746,19 +671,8 @@ mgr.delete(session_id)
 1. `src/rai/harness/runner.py` — `await bus.publish("my_event", {...})`
 2. `src/rai/client/_events.py` — dataclass
 3. `src/rai/client/_sse.py` — dispatcher branch
-4. `packages/rai-js/src/events.ts` — TypeScript interface + add to RAIEvent union
-5. `packages/rai-js/src/useRAIStream.ts` — handle in `processEventRef.current` switch
-6. `src/rai/sdk/__init__.py` — export Python class
-7. `packages/rai-js/src/index.ts` — export TS type
-8. `AGENTS.md` — add to SSE events list
-
-### New JS SDK feature
-
-1. `packages/rai-js/src/` — implement
-2. `packages/rai-js/src/index.ts` — export
-3. `packages/rai-js/README.md` — document
-4. `packages/rai-js/examples/patterns/` — add example file
-5. `AGENTS.md` — update JS SDK section
+4. `src/rai/sdk/__init__.py` — export Python class
+5. `AGENTS.md` — add to SSE events list
 
 ### New claude-agent-sdk feature (Python)
 
@@ -804,9 +718,6 @@ if os.environ.get("RAI_INSPECT", "0") == "1":
 - **Commit policy**: never commit unless user explicitly asks; no Co-Authored-By
 - **Textual widgets**: always use `_escape()` helper — never `rich.markup.escape()`
 - **Security**: `content_file` paths must validate against `/tmp/`, `$TMPDIR/`, `~/.rai/`
-- **JS SDK**: all state in `useReducer` — never `useSyncExternalStore` with external mutable store
-- **JS async loops**: use `dispatchRef.current()` and `processEventRef.current()` — never capture functions directly in SSE loop closures
-
 ---
 
 ## Environment Variables
@@ -862,10 +773,6 @@ git tag v2.1.0
 git push origin main && git push origin v2.1.0
 # → publish-pypi.yml triggers on GitHub Release
 
-# JS (@revolt-rai/js on npm)
-# Same tag triggers publish-npm.yml
-# Requires NPM_TOKEN secret
-
 # Docker (GHCR)
 # publish-docker-image.yml triggers on release / v* tag / main push
 ```
@@ -877,7 +784,6 @@ git push origin main && git push origin v2.1.0
 ```bash
 pip install revolt-rai                    # Python CLI + TUI + HTTP server + Claude SDK
 pip install revolt-rai[bedrock]           # + AWS Bedrock provider
-npm install @revolt-rai/js                # JS/TS SDK
 ```
 
 > No `[http]` extra — `fastapi` and `uvicorn` are core deps since v2.0.0.

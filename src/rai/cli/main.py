@@ -1075,17 +1075,43 @@ def claude_tui_cmd(
     no_hitl: bool = typer.Option(False, "--no-hitl", help="Disable HITL (autonomous)"),
     no_subagents: bool = typer.Option(False, "--no-subagents", help="Skip loading subagents from ~/.rai/agents/"),
     theme: str = typer.Option("github-dark", "--theme", help="TUI theme (rai, github-dark, glass, claude)"),
+    url: Annotated[Optional[str], typer.Option("--url", help="Connect to remote rai claude-serve (skip local server launch)")] = None,
 ) -> None:
     """Launch the Claude TUI — starts server + interactive terminal UI.
 
     Starts `rai claude-serve` as a background process, waits for it to become
     ready, then launches the Textual TUI. On exit the server is stopped.
+
+    Use --url to connect to a remote server instead of starting a local one:
+      rai claude --url http://10.0.0.5:8001 --api-key secret
     """
     import subprocess
     import time
 
     import httpx
 
+    from rai.tui.claude_tui import ClaudeTUIApp
+
+    # Remote mode: connect to existing server, skip local spawn
+    if url:
+        ready = False
+        try:
+            if httpx.get(f"{url}/ok", timeout=3).status_code == 200:
+                ready = True
+        except Exception:
+            pass
+        if not ready:
+            typer.secho(f"Cannot reach remote server at {url}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+        typer.secho(f"Connected to remote: {url}", fg=typer.colors.GREEN, err=True)
+        ClaudeTUIApp(
+            url,
+            api_key=api_key or "",
+            initial_theme=theme,
+        ).run()
+        return
+
+    # Local mode: spawn claude-serve subprocess
     cmd = [sys.executable, "-m", "rai.cli.main", "claude-serve",
            "--agent", agent, "--port", str(port), "--host", host]
     if api_key:
@@ -1117,8 +1143,6 @@ def claude_tui_cmd(
         raise typer.Exit(1)
 
     try:
-        from rai.tui.claude_tui import ClaudeTUIApp
-
         ClaudeTUIApp(
             base_url,
             api_key=api_key or "",

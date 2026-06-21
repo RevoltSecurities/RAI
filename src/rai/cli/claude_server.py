@@ -64,11 +64,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections.abc import AsyncGenerator
 from typing import Any
 
 from contextlib import asynccontextmanager
+
+_log = logging.getLogger(__name__)
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -113,6 +116,11 @@ def _max_sessions() -> int:
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
+    if not _api_key():
+        _log.warning(
+            "RAI_CLAUDE_API_KEY is not set — claude-serve is open to all requests. "
+            "Pass --api-key <secret> to require Bearer token authentication."
+        )
     yield
     # Shutdown: disconnect every live subprocess cleanly
     async with _sessions_lock:
