@@ -1,3 +1,141 @@
+# RAI v2.1.0 Release Notes
+
+## What's New
+
+### Subagents v2 — Async Background Agent System
+
+Agents can now spawn, monitor, and coordinate parallel background agents from within a single session. The new `SubagentService` manages full lifecycle including HITL, output discipline, and completion notifications injected back into the parent agent's context.
+
+**10 new LLM tools available to the agent:**
+
+| Tool | Description |
+|------|-------------|
+| `Subagent` | Launch a single background agent; returns `task_id` immediately |
+| `MultiSubagents` | Launch multiple agents in parallel |
+| `Pipeline` | DAG of tasks with dependency ordering |
+| `SubagentStatus` | Get current status + output of a task |
+| `SubagentCancel` | Cancel a running task |
+| `SubagentUpdate` | Send a follow-up message to a completed task |
+| `SubagentResponse` | Block and wait for task completion |
+| `SubagentProgress` | Read live checkpoint of a running task |
+| `ListSubagents` | List available subagent types |
+| `ListTasks` | List all tasks for the current run |
+
+**Output discipline**: every subagent writes structured output to `/tmp/rai_{task_id}_output.md`. The parent agent receives a ≤400-char preview + file path when the task completes — subagent context never pollutes the main agent's checkpoint.
+
+---
+
+### Claude SDK Mode — No API Key Required
+
+RAI now includes a full Claude Code subscription-backed mode that requires no `ANTHROPIC_API_KEY`.
+
+```bash
+rai claude                        # Claude TUI (HITL on by default)
+rai claude --no-hitl              # autonomous mode
+rai claude --agent pentest        # named agent
+rai claude --model claude-opus-4-8
+rai claude-serve                  # FastAPI SSE proxy at :8001
+rai claude --url http://host:8001 # connect TUI to remote claude-serve
+```
+
+The Textual TUI (`rai claude`) streams tokens live with tool call cards, subagent progress, thinking blocks, and inline HITL approval panels.
+
+**Python SDK:**
+```python
+from rai.sdk import ClaudeAgent
+
+async with ClaudeAgent.builder().agent_name("rai").without_hitl().build() as agent:
+    result = await agent.run("scan example.com for vulnerabilities")
+```
+
+---
+
+### Remote TUI (`--url`)
+
+Connect the Claude TUI to a remote `rai claude-serve` without spawning a local subprocess:
+
+```bash
+rai claude --url http://remote-server:8001 --api-key <key>
+```
+
+Health-checks the remote server before launching; exits with a clear error if unreachable.
+
+---
+
+### Docker Container Routing (`--docker`)
+
+All `bash` and `execute` tool calls can be routed to a persistent Docker container instead of the host. Bring any image — Kali, Parrot, or a custom pentest toolkit.
+
+```bash
+rai chat --docker kalilinux/kali-rolling
+rai chat --docker parrotsec/security
+```
+
+A shared workspace is mounted at `/workspace` inside the container. The container is started on server boot and stopped on exit. No default image is provided — users supply their own.
+
+**Container capabilities:** `NET_RAW`, `NET_ADMIN`, `SYS_PTRACE`, `SETUID`, `CHOWN`, `DAC_OVERRIDE`, `NET_BIND_SERVICE`, `KILL`
+
+---
+
+### API Auth Hardening
+
+- **Fixed**: `/docs`, `/openapi.json`, and `/redoc` were bypassing the `X-API-Key` guard on the HTTP harness when `--server-key` was set — an attacker on the network could enumerate all API endpoints and their full schemas without a key. Now only `/ok` (health check) is exempt.
+- Both servers (`rai http serve` and `rai claude-serve`) now log a startup warning when launched without an API key.
+
+---
+
+### New Middleware (7 layers added)
+
+| Middleware | Role |
+|-----------|------|
+| `AllowedToolsMiddleware` | Hard-enforce per-run tool whitelist via `ContextVar` |
+| `ReadFileDedupMiddleware` | Stub unchanged file re-reads via mtime check |
+| `SubagentRestrictMiddleware` | Block `task` tool for subagents (no recursive nesting) |
+| `DockerRouterMiddleware` | Route bash/execute to Docker container when `--docker` is active |
+| `RetryMiddleware` | Auto-retry 429/502/503/timeouts with exponential backoff |
+| `WriteTruncateMiddleware` | Truncate file-write args in old messages; last 5 writes kept verbatim |
+| `CostTrackingMiddleware` | Accumulate per-run cost in `ContextVar` |
+
+---
+
+### Stability Fixes (v2.1.0)
+
+| # | File | Fix |
+|---|------|-----|
+| 17 | `harness/runner.py` | Remove `<system-info>cwd:</system-info>` injection — caused new-thread no-response |
+| 18 | `tui/app.py` | `HistoryDivider` only shown when messages exist |
+| 19 | `harness/sse.py` | `RunEventBus.subscribe()` replays all buffered events on first connection |
+| 20 | `tools/security/web_search.py` | Multi-engine search via ddgs + SSL verify flag + DDG lite fallback |
+| 21 | `tools/security/web_fetch.py` | Chunked reading + markdownify extraction |
+
+---
+
+## Upgrade from v2.0.2
+
+No breaking changes. All existing agent configs, memories, and sessions work as-is.
+
+**New install — Claude SDK mode (no API key needed):**
+```bash
+pip install revolt-rai   # claude-agent-sdk bundled since v2.0.3
+rai claude               # requires `claude` CLI authenticated in PATH
+```
+
+**Docker routing:**
+```bash
+rai chat --docker kalilinux/kali-rolling   # pulls image on first run
+```
+
+---
+
+## Install
+
+```bash
+pip install revolt-rai          # Python CLI + TUI + HTTP server + Claude SDK
+pip install revolt-rai[bedrock] # + AWS Bedrock provider
+```
+
+---
+
 # RAI v2.0.2 Release Notes
 
 ## What's New
