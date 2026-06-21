@@ -7,6 +7,9 @@ from typing import TYPE_CHECKING
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest
 from langchain_core.messages import ToolMessage
 
+import logging
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -169,8 +172,8 @@ class PlanModeMiddleware(AgentMiddleware):
             blocked = self._check_plan_block(request)
             if blocked:
                 return blocked
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("PlanModeMiddleware: plan block check failed (%s) — allowing tool through", exc)
         return handler(request)
 
     async def awrap_tool_call(
@@ -182,8 +185,8 @@ class PlanModeMiddleware(AgentMiddleware):
             blocked = self._check_plan_block(request)
             if blocked:
                 return blocked
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("PlanModeMiddleware: plan block check failed (%s) — allowing tool through", exc)
         return await handler(request)
 
     # ------------------------------------------------------------------

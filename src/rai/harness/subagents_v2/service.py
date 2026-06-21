@@ -254,6 +254,12 @@ class SubagentService:
         """Remove ephemeral state for a completed task (keep meta for queries)."""
         self._active_tasks.pop(task_id, None)
         self._hitl_futures.pop(task_id, None)
+        self._buses.pop(task_id, None)
+        self._graphs.pop(task_id, None)
+
+    def set_active_task(self, task_id: str, asyncio_task: "asyncio.Task[Any]") -> None:
+        """Replace the asyncio.Task for an already-registered task (SubagentUpdate resume path)."""
+        self._active_tasks[task_id] = asyncio_task
 
     def cleanup_run(self, parent_run_id: str) -> None:
         """Cleanup all state for a completed parent run."""

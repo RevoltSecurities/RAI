@@ -197,7 +197,7 @@ class DockerRouterMiddleware(AgentMiddleware):
             logger.info("No RAI_DOCKER_IMAGE configured — skipping Docker routing")
             return
 
-        if not shutil.which("docker") and not shutil.which("sudo"):
+        if not shutil.which("docker"):
             logger.warning(
                 "docker binary not found in PATH — falling back to host bash execution"
             )

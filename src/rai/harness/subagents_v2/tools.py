@@ -249,15 +249,29 @@ def build_subagent_tools(
             })
 
         if not pipeline_id:
-            pipeline_id = uuid.uuid4().hex[:12]
+            pipeline_id = uuid.uuid4().hex[:16]
 
         service = SubagentService.instance()
         task_updates: dict[str, AsyncTask] = {}
 
         from rai.harness.subagents_v2.executor import run_subagent
 
-        results = []
+        # Pass 1: pre-generate all task_ids so deps can reference them by label.
+        # Only map labels for valid agents — unknown agents are skipped in Pass 2
+        # and must not create phantom task_ids that waiters would poll for forever.
+        label_to_task_id: dict[str, str] = {}
+        spec_task_ids: list[str] = []
         for spec in tasks:
+            tid = uuid.uuid4().hex[:16]
+            spec_task_ids.append(tid)
+            if spec.get("agent", "rai") in agent_names:
+                lbl = spec.get("label", "")
+                if lbl:
+                    label_to_task_id[lbl] = tid
+
+        # Pass 2: launch tasks, gating dependents behind their deps
+        results = []
+        for spec, task_id in zip(tasks, spec_task_ids):
             agent = spec.get("agent", "rai")
             prompt = spec.get("prompt", "")
             label = spec.get("label", "")
@@ -267,24 +281,42 @@ def build_subagent_tools(
                 results.append(f"Skipped unknown agent '{agent}'")
                 continue
 
-            task_id = uuid.uuid4().hex[:16]
             prompt = prompt + _output_discipline_suffix(task_id)
-            asyncio_task = asyncio.create_task(
-                run_subagent(
-                    task_id=task_id,
-                    agent_name=agent,
-                    input_message=prompt,
-                    parent_run_id=ctx.get("run_id", ""),
-                    parent_thread_id=ctx.get("thread_id", ""),
-                    parent_bus=ctx.get("parent_bus"),
-                    label=label or None,
-                    pipeline_id=pipeline_id,
-                    depends_on=deps or None,
-                    parent_api_key=ctx.get("parent_api_key", ""),
-                    parent_base_url=ctx.get("parent_base_url", ""),
-                    parent_model=ctx.get("parent_model", ""),
-                )
+            run_kwargs: dict[str, Any] = dict(
+                task_id=task_id,
+                agent_name=agent,
+                input_message=prompt,
+                parent_run_id=ctx.get("run_id", ""),
+                parent_thread_id=ctx.get("thread_id", ""),
+                parent_bus=ctx.get("parent_bus"),
+                label=label or None,
+                pipeline_id=pipeline_id,
+                depends_on=deps or None,
+                parent_api_key=ctx.get("parent_api_key", ""),
+                parent_base_url=ctx.get("parent_base_url", ""),
+                parent_model=ctx.get("parent_model", ""),
             )
+
+            dep_task_ids = [label_to_task_id[lbl] for lbl in deps if lbl in label_to_task_id]
+
+            if dep_task_ids:
+                async def _run_after_deps(
+                    _dep_ids: list[str] = dep_task_ids,
+                    _kwargs: dict[str, Any] = run_kwargs,
+                ) -> None:
+                    while True:
+                        if all(
+                            (m := service.get_task_meta(d)) and m.get("status") in TERMINAL_STATUSES
+                            for d in _dep_ids
+                        ):
+                            break
+                        await asyncio.sleep(1.0)
+                    await run_subagent(**_kwargs)
+
+                asyncio_task = asyncio.create_task(_run_after_deps())
+            else:
+                asyncio_task = asyncio.create_task(run_subagent(**run_kwargs))
+
             service.register_task(
                 task_id,
                 asyncio_task,
@@ -298,7 +330,8 @@ def build_subagent_tools(
             )
             task_meta = make_task(task_id, agent, label=label or None, pipeline_id=pipeline_id, depends_on=deps or None)
             task_updates[task_id] = task_meta
-            results.append(f"  {agent} → {task_id}" + (f" (deps: {deps})" if deps else ""))
+            dep_str = f" (waits for: {deps})" if dep_task_ids else ""
+            results.append(f"  {agent} → {task_id}{dep_str}")
 
         msg = f"Pipeline '{pipeline_id}' launched ({len(task_updates)} tasks):\n" + "\n".join(results)
         return Command(update={
@@ -440,16 +473,6 @@ def build_subagent_tools(
                 "messages": [ToolMessage(f"No task found: '{task_id}'", tool_call_id=tool_call_id)],
             })
 
-        graph_info = service.get_graph(task_id)
-        if not graph_info:
-            return Command(update={
-                "messages": [ToolMessage(
-                    f"Cannot resume task {task_id}: graph not cached.",
-                    tool_call_id=tool_call_id,
-                )],
-            })
-
-        graph, config = graph_info
         ctx = _get_run_context()
 
         from rai.harness.subagents_v2.executor import run_subagent
@@ -468,7 +491,7 @@ def build_subagent_tools(
                 parent_model=ctx.get("parent_model", ""),
             )
         )
-        service._active_tasks[task_id] = asyncio_task
+        service.set_active_task(task_id, asyncio_task)
         service.update_task_status(task_id, "running")
 
         updated = AsyncTask(
@@ -531,17 +554,13 @@ def build_subagent_tools(
 
         ctx = _get_run_context()
         run_id = ctx.get("run_id", "")
-        try:
-            notif = await asyncio.wait_for(
-                service.wait_completion(run_id, timeout=float(timeout_seconds)),
-                timeout=float(timeout_seconds),
-            )
-        except asyncio.TimeoutError:
-            return f"No response within {timeout_seconds}s — agent still working."
+        notif = await service.wait_completion(run_id, timeout=float(timeout_seconds))
 
         if notif and notif["task_id"] == task_id:
             return notif.get("output_preview", "(completed)")
-        return f"Task {task_id} still running."
+        if notif is None:
+            return f"No response within {timeout_seconds}s. Use SubagentStatus to check current state."
+        return f"A different task completed ({notif['task_id']}). Use SubagentStatus to check task {task_id}."
 
     # ------------------------------------------------------------------
 

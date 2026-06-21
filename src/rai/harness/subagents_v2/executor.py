@@ -518,6 +518,9 @@ async def run_subagent(
             "output_preview": output[:400],
         })
 
+        # Grab bus reference BEFORE cleanup_task() removes it from service._buses
+        _sub_bus = service.get_bus(task_id)
+
         # NOW update service state to terminal
         service.update_task_status(task_id, status, output[:400])
         service.cleanup_task(task_id)
@@ -531,7 +534,6 @@ async def run_subagent(
             except Exception:
                 pass
 
-        # Close per-task bus (sync method, requires run_id)
-        sub_bus = service.get_bus(task_id)
-        if sub_bus:
-            sub_bus.close(task_id)
+        # Close per-task bus — sends sentinel to all SSE subscribers
+        if _sub_bus:
+            _sub_bus.close(task_id)
